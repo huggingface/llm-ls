@@ -68,13 +68,17 @@ fn internal_error<E: Display>(err: E) -> Error {
 }
 
 async fn log(msg: &str) -> Result<()> {
+    let current_time = chrono::Utc::now();
+    let pid = std::process::id();
+    let mut log_line = format!("[{current_time}] {{{pid}}} ");
+    log_line.push_str(msg);
     tokio::fs::OpenOptions::new()
         .create(true)
         .append(true)
         .open(get_cache_dir_path()?.join("llm-ls.log"))
         .await
         .map_err(internal_error)?
-        .write_all(msg.as_bytes())
+        .write_all(log_line.as_bytes())
         .await
         .map_err(internal_error)?;
     Ok(())
@@ -135,13 +139,10 @@ impl Backend {
             .map_err(internal_error)?;
         let _ = context;
         let result = request_completion(&self.http_client, context.configuration).await?;
-        log(&format!("get_completions request result {result:?}\n"))
-            .await
-            .map_err(internal_error)?;
         if result.len() > 0 {
             let generated_text = result[0].generated_text.clone();
 
-            log(&format!("completion request: {generated_text}\n"))
+            log(&format!("completion result: {generated_text}\n"))
                 .await
                 .map_err(internal_error)?;
 
