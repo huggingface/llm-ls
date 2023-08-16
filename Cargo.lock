@@ -521,6 +521,7 @@ dependencies = [
  "home",
  "reqwest",
  "serde",
+ "serde_json",
  "tokio",
  "tower-lsp",
 ]

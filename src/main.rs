@@ -2,12 +2,14 @@ use reqwest::header::AUTHORIZATION;
 use serde::{Deserialize, Serialize};
 use std::fmt::Display;
 use std::path::PathBuf;
+use std::sync::Arc;
 use tokio::io::AsyncWriteExt;
+use tokio::sync::RwLock;
 use tower_lsp::jsonrpc::{Error, Result};
 use tower_lsp::lsp_types::*;
 use tower_lsp::{Client, LanguageServer, LspService, Server};
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 struct RequestParams {
     max_new_tokens: u32,
     temperature: f32,
@@ -57,6 +59,7 @@ enum APIResponse {
 struct Backend {
     client: Client,
     http_client: reqwest::Client,
+    configuration: Arc<RwLock<Configuration>>,
 }
 
 fn internal_error<E: Display>(err: E) -> Error {
@@ -91,16 +94,14 @@ fn get_cache_dir_path() -> Result<PathBuf> {
 
 async fn request_completion(
     http_client: &reqwest::Client,
-    config: Configuration,
+    config: &Configuration,
 ) -> Result<Vec<Generation>> {
-    let mut req = http_client
-        .post("https://api-inference.huggingface.co/models/bigcode/starcoder")
-        .json(&APIRequest {
-            inputs: "Hello my name is ".to_owned(),
-            parameters: config.request_params,
-        });
+    let mut req = http_client.post(&config.model).json(&APIRequest {
+        inputs: "Hello my name is ".to_owned(),
+        parameters: config.request_params.clone(),
+    });
 
-    if let Some(api_token) = config.api_token {
+    if let Some(api_token) = config.api_token.clone() {
         req = req.header(AUTHORIZATION, format!("Bearer {api_token}"))
     }
 
@@ -121,8 +122,6 @@ struct Completion {
 struct CompletionRequest {
     #[serde(flatten)]
     text_document_position: TextDocumentPositionParams,
-    #[serde(flatten)]
-    configuration: Configuration,
 }
 
 #[derive(Debug, Deserialize)]
@@ -130,6 +129,7 @@ struct Configuration {
     request_params: RequestParams,
     fim: FimParams,
     api_token: Option<String>,
+    model: String,
 }
 
 impl Backend {
@@ -138,7 +138,8 @@ impl Backend {
             .await
             .map_err(internal_error)?;
         let _ = context;
-        let result = request_completion(&self.http_client, context.configuration).await?;
+        let result =
+            request_completion(&self.http_client, &*self.configuration.read().await).await?;
         if result.len() > 0 {
             let generated_text = result[0].generated_text.clone();
 
@@ -155,10 +156,18 @@ impl Backend {
 
 #[tower_lsp::async_trait]
 impl LanguageServer for Backend {
-    async fn initialize(&self, _: InitializeParams) -> Result<InitializeResult> {
+    async fn initialize(&self, ip: InitializeParams) -> Result<InitializeResult> {
         tokio::fs::create_dir_all(get_cache_dir_path()?)
             .await
             .map_err(internal_error)?;
+        if let Some(init_options) = ip.initialization_options {
+            let configuration = serde_json::from_value(init_options).map_err(internal_error)?;
+            log(&format!("configuration {configuration:?}\n"))
+                .await
+                .map_err(internal_error)?;
+            let mut new_configuration = self.configuration.write().await;
+            *new_configuration = configuration;
+        };
         Ok(InitializeResult {
             capabilities: ServerCapabilities {
                 completion_provider: Some(CompletionOptions {
@@ -232,6 +241,23 @@ async fn main() {
     let (service, socket) = LspService::build(|client| Backend {
         client,
         http_client,
+        configuration: Arc::new(RwLock::new(Configuration {
+            request_params: RequestParams {
+                max_new_tokens: 60,
+                temperature: 0.2,
+                do_sample: true,
+                top_p: 0.95,
+                stop_token: "<|endoftext|>".to_owned(),
+            },
+            fim: FimParams {
+                enabled: true,
+                prefix: "<fim_prefix>".to_owned(),
+                middle: "<fim_middle>".to_owned(),
+                suffix: "<fim_suffix>".to_owned(),
+            },
+            api_token: None,
+            model: "https://api-inference.huggingface.co/models/bigcode/starcoder".to_owned(),
+        })),
     })
     .custom_method("llm-ls/getCompletions", Backend::get_completions)
     .finish();
