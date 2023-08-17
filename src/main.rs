@@ -1,13 +1,17 @@
 use reqwest::header::AUTHORIZATION;
+use ropey::Rope;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fmt::Display;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::io::AsyncWriteExt;
 use tokio::sync::RwLock;
 use tower_lsp::jsonrpc::{Error, Result};
 use tower_lsp::lsp_types::*;
 use tower_lsp::{Client, LanguageServer, LspService, Server};
+use tracing::info;
+use tracing_appender::rolling;
+use tracing_subscriber::EnvFilter;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 struct RequestParams {
@@ -18,7 +22,7 @@ struct RequestParams {
     stop_token: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 struct FimParams {
     enabled: bool,
     prefix: String,
@@ -58,8 +62,8 @@ enum APIResponse {
 #[derive(Debug)]
 struct Backend {
     client: Client,
+    document_map: Arc<RwLock<HashMap<String, Rope>>>,
     http_client: reqwest::Client,
-    configuration: Arc<RwLock<Configuration>>,
 }
 
 fn internal_error<E: Display>(err: E) -> Error {
@@ -70,38 +74,36 @@ fn internal_error<E: Display>(err: E) -> Error {
     }
 }
 
-async fn log(msg: &str) -> Result<()> {
-    let current_time = chrono::Utc::now();
-    let pid = std::process::id();
-    let mut log_line = format!("[{current_time}] {{{pid}}} ");
-    log_line.push_str(msg);
-    tokio::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(get_cache_dir_path()?.join("llm-ls.log"))
-        .await
-        .map_err(internal_error)?
-        .write_all(log_line.as_bytes())
-        .await
-        .map_err(internal_error)?;
-    Ok(())
-}
-
 fn get_cache_dir_path() -> Result<PathBuf> {
     let home_dir = home::home_dir().ok_or(internal_error("Failed to find home dir"))?;
     Ok(home_dir.join(".cache/llm_ls"))
 }
 
+fn build_prompt(pos: Position, text: &Rope) -> Result<String> {
+    let offset = text
+        .try_line_to_char(pos.line as usize)
+        .map_err(internal_error)?
+        + pos.character as usize;
+    if offset == 0 {
+        Ok("".to_owned())
+    } else {
+        Ok(text.slice(0..offset).to_string())
+    }
+}
+
 async fn request_completion(
     http_client: &reqwest::Client,
-    config: &Configuration,
+    model: &str,
+    request_params: RequestParams,
+    api_token: Option<String>,
+    prompt: String,
 ) -> Result<Vec<Generation>> {
-    let mut req = http_client.post(&config.model).json(&APIRequest {
-        inputs: "Hello my name is ".to_owned(),
-        parameters: config.request_params.clone(),
+    let mut req = http_client.post(model).json(&APIRequest {
+        inputs: prompt,
+        parameters: request_params,
     });
 
-    if let Some(api_token) = config.api_token.clone() {
+    if let Some(api_token) = api_token.clone() {
         req = req.header(AUTHORIZATION, format!("Bearer {api_token}"))
     }
 
@@ -118,14 +120,10 @@ struct Completion {
     generated_text: String,
 }
 
-#[derive(Debug, Deserialize)]
-struct CompletionRequest {
+#[derive(Debug, Deserialize, Serialize)]
+struct CompletionParams {
     #[serde(flatten)]
     text_document_position: TextDocumentPositionParams,
-}
-
-#[derive(Debug, Deserialize)]
-struct Configuration {
     request_params: RequestParams,
     fim: FimParams,
     api_token: Option<String>,
@@ -133,21 +131,28 @@ struct Configuration {
 }
 
 impl Backend {
-    async fn get_completions(&self, context: CompletionRequest) -> Result<Option<Vec<Completion>>> {
-        log(&format!("get_completions {context:?}\n"))
-            .await
-            .map_err(internal_error)?;
-        let _ = context;
-        let result =
-            request_completion(&self.http_client, &*self.configuration.read().await).await?;
+    async fn get_completions(&self, params: CompletionParams) -> Result<Option<Vec<Completion>>> {
+        info!("get_completions {params:?}");
+        let document_map = self.document_map.read().await;
+        let text = document_map
+            .get(params.text_document_position.text_document.uri.as_str())
+            .ok_or(internal_error("failed to find document"))?;
+        let prompt = build_prompt(params.text_document_position.position, text)?;
+        let result = request_completion(
+            &self.http_client,
+            &params.model,
+            params.request_params,
+            params.api_token,
+            prompt.clone(),
+        )
+        .await?;
         if result.len() > 0 {
-            let generated_text = result[0].generated_text.clone();
+            let generated_text = ropey::Rope::from_str(&result[0].generated_text);
 
-            log(&format!("completion result: {generated_text}\n"))
-                .await
-                .map_err(internal_error)?;
-
-            Ok(Some(vec![Completion { generated_text }]))
+            let offset = prompt.len();
+            Ok(Some(vec![Completion {
+                generated_text: generated_text.slice(offset..).to_string(),
+            }]))
         } else {
             Ok(None)
         }
@@ -156,31 +161,19 @@ impl Backend {
 
 #[tower_lsp::async_trait]
 impl LanguageServer for Backend {
-    async fn initialize(&self, ip: InitializeParams) -> Result<InitializeResult> {
+    async fn initialize(&self, _: InitializeParams) -> Result<InitializeResult> {
         tokio::fs::create_dir_all(get_cache_dir_path()?)
             .await
             .map_err(internal_error)?;
-        if let Some(init_options) = ip.initialization_options {
-            let configuration = serde_json::from_value(init_options).map_err(internal_error)?;
-            log(&format!("configuration {configuration:?}\n"))
-                .await
-                .map_err(internal_error)?;
-            let mut new_configuration = self.configuration.write().await;
-            *new_configuration = configuration;
-        };
         Ok(InitializeResult {
+            server_info: Some(ServerInfo {
+                name: "llm-ls".to_owned(),
+                version: None,
+            }),
             capabilities: ServerCapabilities {
-                completion_provider: Some(CompletionOptions {
-                    resolve_provider: Some(false),
-                    trigger_characters: Some(vec![
-                        ".".to_owned(),
-                        "(".to_owned(),
-                        "{".to_owned(),
-                        ":".to_owned(),
-                        ":".to_owned(),
-                    ]),
-                    ..Default::default()
-                }),
+                text_document_sync: Some(TextDocumentSyncCapability::Kind(
+                    TextDocumentSyncKind::FULL,
+                )),
                 ..Default::default()
             },
             ..Default::default()
@@ -191,42 +184,56 @@ impl LanguageServer for Backend {
         self.client
             .log_message(MessageType::INFO, "{llm-ls} initialized")
             .await;
-        let _ = log("initialized\n").await;
+        let _ = info!("initialized\n");
     }
 
     // TODO:
-    // handle textDocument/didOpen, textDocument/didChange, textDocument/didClose
+    // textDocument/didClose
 
-    async fn did_open(&self, _: DidOpenTextDocumentParams) {
+    async fn did_open(&self, params: DidOpenTextDocumentParams) {
         self.client
             .log_message(MessageType::INFO, "{llm-ls} file opened")
             .await;
-        let _ = log("file opened\n").await;
+        let rope = ropey::Rope::from_str(&params.text_document.text);
+        let uri = params.text_document.uri.to_string();
+        self.document_map
+            .write()
+            .await
+            .entry(uri)
+            .or_insert(rope.clone());
+        let _ = info!("file opened\n");
     }
 
-    async fn did_change(&self, _: DidChangeTextDocumentParams) {
+    async fn did_change(&self, params: DidChangeTextDocumentParams) {
         self.client
             .log_message(MessageType::INFO, "{llm-ls} file changed")
             .await;
-        let _ = log("file changed\n").await;
+        let rope = ropey::Rope::from_str(&params.content_changes[0].text);
+        let uri = params.text_document.uri.to_string();
+        self.document_map
+            .write()
+            .await
+            .entry(uri)
+            .or_insert(rope.clone());
+        let _ = info!("file changed\n");
     }
 
     async fn did_save(&self, _: DidSaveTextDocumentParams) {
         self.client
             .log_message(MessageType::INFO, "{llm-ls} file saved")
             .await;
-        let _ = log("file saved\n").await;
+        let _ = info!("file saved\n");
     }
 
     async fn did_close(&self, _: DidCloseTextDocumentParams) {
         self.client
             .log_message(MessageType::INFO, "{llm-ls} file closed")
             .await;
-        let _ = log("file closed\n").await;
+        let _ = info!("file closed\n");
     }
 
     async fn shutdown(&self) -> Result<()> {
-        let _ = log("shutdown\n").await;
+        let _ = info!("shutdown");
         Ok(())
     }
 }
@@ -236,28 +243,31 @@ async fn main() {
     let stdin = tokio::io::stdin();
     let stdout = tokio::io::stdout();
 
+    let log_file = rolling::never(
+        get_cache_dir_path().expect("failed to find home dir"),
+        "llm-ls.log",
+    );
+    let builder = tracing_subscriber::fmt()
+        .with_writer(log_file)
+        .with_target(true)
+        .with_line_number(true)
+        .with_env_filter(
+            EnvFilter::try_from_env("LOG_LEVEL").unwrap_or_else(|_| EnvFilter::new("info")),
+        );
+
+    builder
+        .json()
+        .flatten_event(true)
+        .with_current_span(false)
+        .with_span_list(true)
+        .init();
+
     let http_client = reqwest::Client::new();
 
     let (service, socket) = LspService::build(|client| Backend {
         client,
+        document_map: Arc::new(RwLock::new(HashMap::new())),
         http_client,
-        configuration: Arc::new(RwLock::new(Configuration {
-            request_params: RequestParams {
-                max_new_tokens: 60,
-                temperature: 0.2,
-                do_sample: true,
-                top_p: 0.95,
-                stop_token: "<|endoftext|>".to_owned(),
-            },
-            fim: FimParams {
-                enabled: true,
-                prefix: "<fim_prefix>".to_owned(),
-                middle: "<fim_middle>".to_owned(),
-                suffix: "<fim_suffix>".to_owned(),
-            },
-            api_token: None,
-            model: "https://api-inference.huggingface.co/models/bigcode/starcoder".to_owned(),
-        })),
     })
     .custom_method("llm-ls/getCompletions", Backend::get_completions)
     .finish();
