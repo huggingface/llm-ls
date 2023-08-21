@@ -129,8 +129,25 @@ async fn request_completion(
     }
 }
 
+fn parse_generations(
+    generations: Vec<Generation>,
+    prompt: &str,
+    fim: &FimParams,
+) -> Vec<Completion> {
+    if fim.enabled {
+        vec![]
+    } else {
+        generations
+            .into_iter()
+            .map(|g| Completion {
+                generated_text: g.generated_text.replace(prompt, ""),
+            })
+            .collect()
+    }
+}
+
 impl Backend {
-    async fn get_completions(&self, params: CompletionParams) -> Result<Option<Vec<Completion>>> {
+    async fn get_completions(&self, params: CompletionParams) -> Result<Vec<Completion>> {
         info!("get_completions {params:?}");
         let document_map = self.document_map.read().await;
 
@@ -146,16 +163,8 @@ impl Backend {
             prompt.clone(),
         )
         .await?;
-        if result.len() > 0 {
-            let generated_text = ropey::Rope::from_str(&result[0].generated_text);
 
-            let offset = prompt.len();
-            Ok(Some(vec![Completion {
-                generated_text: generated_text.slice(offset..).to_string(),
-            }]))
-        } else {
-            Ok(None)
-        }
+        Ok(parse_generations(result, &prompt, &params.fim))
     }
 }
 
@@ -193,11 +202,12 @@ impl LanguageServer for Backend {
             .await;
         let rope = ropey::Rope::from_str(&params.text_document.text);
         let uri = params.text_document.uri.to_string();
-        self.document_map
+        *self
+            .document_map
             .write()
             .await
             .entry(uri.clone())
-            .or_insert(rope.clone());
+            .or_insert(Rope::new()) = rope.clone();
         let _ = info!("{uri} opened");
     }
 
@@ -207,11 +217,12 @@ impl LanguageServer for Backend {
             .await;
         let rope = ropey::Rope::from_str(&params.content_changes[0].text);
         let uri = params.text_document.uri.to_string();
-        self.document_map
+        *self
+            .document_map
             .write()
             .await
             .entry(uri.clone())
-            .or_insert(rope.clone());
+            .or_insert(Rope::new()) = rope;
         let _ = info!("{uri} changed");
     }
 
