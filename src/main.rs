@@ -76,7 +76,7 @@ struct Backend {
     language_comments: HashMap<String, LanguageComment>,
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize)]
 struct Completion {
     generated_text: String,
 }
@@ -128,38 +128,39 @@ fn file_path_comment(
             close: None,
         },
     };
-    let mut header = lc.open;
-    header.push(' ');
-    header.push_str(&path_in_workspace);
+    let mut commented_path = lc.open;
+    commented_path.push(' ');
+    commented_path.push_str(&path_in_workspace);
     if let Some(close) = lc.close {
-        header.push(' ');
-        header.push_str(&close);
+        commented_path.push(' ');
+        commented_path.push_str(&close);
     }
-    header.push('\n');
-    header
+    commented_path.push('\n');
+    commented_path
 }
 
 fn build_prompt(pos: Position, text: &Rope, fim: &FimParams, file_path: String) -> Result<String> {
     let mut prompt = file_path;
+    let cursor_offset = text
+        .try_line_to_char(pos.line as usize)
+        .map_err(internal_error)?
+        + pos.character as usize;
+    let text_len = text.len_chars();
+    // XXX: not sure this is useful, rather be safe than sorry
+    let cursor_offset = if cursor_offset > text_len {
+        text_len
+    } else {
+        cursor_offset
+    };
     if fim.enabled {
-        let cursor_offset = text
-            .try_line_to_char(pos.line as usize)
-            .map_err(internal_error)?
-            + pos.character as usize;
-        let text_len = text.len_chars();
+        prompt.push_str(&fim.prefix);
+        prompt.push_str(&text.slice(0..cursor_offset).to_string());
+        prompt.push_str(&fim.suffix);
+        prompt.push_str(&text.slice(cursor_offset..text_len).to_string());
+        prompt.push_str(&fim.middle);
         Ok(prompt)
     } else {
-        let offset = text
-            .try_line_to_char(pos.line as usize)
-            .map_err(internal_error)?
-            + pos.character as usize;
-        let text_len = text.len_chars();
-        // XXX: not sure this is useful, rather be safe than sorry
-        if offset > text_len {
-            prompt.push_str(&text.slice(0..text_len).to_string());
-        } else {
-            prompt.push_str(&text.slice(0..offset).to_string());
-        }
+        prompt.push_str(&text.slice(0..cursor_offset).to_string());
         Ok(prompt)
     }
 }
@@ -191,18 +192,14 @@ async fn request_completion(
 fn parse_generations(
     generations: Vec<Generation>,
     prompt: &str,
-    fim: &FimParams,
+    stop_token: &str,
 ) -> Vec<Completion> {
-    if fim.enabled {
-        vec![]
-    } else {
-        generations
-            .into_iter()
-            .map(|g| Completion {
-                generated_text: g.generated_text.replace(prompt, ""),
-            })
-            .collect()
-    }
+    generations
+        .into_iter()
+        .map(|g| Completion {
+            generated_text: g.generated_text.replace(prompt, "").replace(stop_token, ""),
+        })
+        .collect()
 }
 
 impl Backend {
@@ -225,6 +222,7 @@ impl Backend {
             &params.fim,
             file_path,
         )?;
+        let stop_token = params.request_params.stop_token.clone();
         let result = request_completion(
             &self.http_client,
             &params.model,
@@ -234,7 +232,7 @@ impl Backend {
         )
         .await?;
 
-        Ok(parse_generations(result, &prompt, &params.fim))
+        Ok(parse_generations(result, &prompt, &stop_token))
     }
 }
 
