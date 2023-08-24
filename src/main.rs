@@ -1,12 +1,27 @@
+mod language_comments;
+
+use language_comments::build_language_comments;
+use reqwest::header::AUTHORIZATION;
+use ropey::Rope;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fmt::Display;
-use std::path::PathBuf;
-use tokio::io::AsyncWriteExt;
+use std::sync::Arc;
+use tokio::sync::RwLock;
 use tower_lsp::jsonrpc::{Error, Result};
 use tower_lsp::lsp_types::*;
 use tower_lsp::{Client, LanguageServer, LspService, Server};
+use tracing::{error, info};
+use tracing_appender::rolling;
+use tracing_subscriber::EnvFilter;
 
-#[derive(Serialize)]
+#[derive(Clone, Debug, Deserialize)]
+pub struct LanguageComment {
+    open: String,
+    close: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
 struct RequestParams {
     max_new_tokens: u32,
     temperature: f32,
@@ -15,76 +30,236 @@ struct RequestParams {
     stop_token: String,
 }
 
+#[derive(Debug, Deserialize, Serialize)]
+struct FimParams {
+    enabled: bool,
+    prefix: String,
+    middle: String,
+    suffix: String,
+}
+
 #[derive(Serialize)]
 struct APIRequest {
     inputs: String,
     parameters: RequestParams,
 }
 
-#[derive(Deserialize)]
-struct APIResponse {
+#[derive(Debug, Deserialize)]
+struct Generation {
     generated_text: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct APIError {
+    error: String,
+}
+
+impl Display for APIError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.error)
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum APIResponse {
+    Generations(Vec<Generation>),
+    Error(APIError),
+}
+
+#[derive(Debug)]
+struct Document {
+    language_id: String,
+    text: Rope,
+}
+
+impl Document {
+    fn new(language_id: String, text: Rope) -> Self {
+        Self { language_id, text }
+    }
 }
 
 #[derive(Debug)]
 struct Backend {
     client: Client,
+    document_map: Arc<RwLock<HashMap<String, Document>>>,
     http_client: reqwest::Client,
+    workspace_folders: Arc<RwLock<Option<Vec<WorkspaceFolder>>>>,
+    language_comments: HashMap<String, LanguageComment>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct Completion {
+    generated_text: String,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct CompletionParams {
+    #[serde(flatten)]
+    text_document_position: TextDocumentPositionParams,
+    request_params: RequestParams,
+    fim: FimParams,
+    api_token: Option<String>,
+    model: String,
 }
 
 fn internal_error<E: Display>(err: E) -> Error {
+    let err_msg = err.to_string();
+    error!(err_msg);
     Error {
         code: tower_lsp::jsonrpc::ErrorCode::InternalError,
-        message: err.to_string(),
+        message: err_msg.into(),
         data: None,
     }
 }
 
-fn get_cache_dir_path() -> Result<PathBuf> {
-    let home_dir = home::home_dir().ok_or(internal_error("Failed to find home dir"))?;
-    Ok(home_dir.join(".cache/ccserver"))
+fn file_path_comment(
+    file_url: Url,
+    file_language_id: String,
+    workspace_folders: Option<&Vec<WorkspaceFolder>>,
+    language_comments: &HashMap<String, LanguageComment>,
+) -> String {
+    let mut file_path = file_url.path().to_owned();
+    let path_in_workspace = if let Some(workspace_folders) = workspace_folders {
+        for workspace_folder in workspace_folders {
+            let workspace_folder_path = workspace_folder.uri.path();
+            if file_path.starts_with(workspace_folder_path) {
+                file_path = file_path.replace(workspace_folder_path, "");
+                break;
+            }
+        }
+        file_path
+    } else {
+        file_path
+    };
+    let lc = match language_comments.get(&file_language_id) {
+        Some(id) => id.clone(),
+        None => LanguageComment {
+            open: "//".to_owned(),
+            close: None,
+        },
+    };
+    let mut commented_path = lc.open;
+    commented_path.push(' ');
+    commented_path.push_str(&path_in_workspace);
+    if let Some(close) = lc.close {
+        commented_path.push(' ');
+        commented_path.push_str(&close);
+    }
+    commented_path.push('\n');
+    commented_path
 }
 
-async fn request_completion(http_client: &reqwest::Client) -> Result<Vec<APIResponse>> {
-    http_client
-        .post("https://api-inference.huggingface.co/models/bigcode/starcoder")
-        .json(&APIRequest {
-            inputs: "Hello my name is ".to_owned(),
-            parameters: RequestParams {
-                max_new_tokens: 60,
-                temperature: 0.2,
-                do_sample: true,
-                top_p: 0.95,
-                stop_token: "\n".to_owned(),
-            },
+fn build_prompt(pos: Position, text: &Rope, fim: &FimParams, file_path: String) -> Result<String> {
+    let mut prompt = file_path;
+    let cursor_offset = text
+        .try_line_to_char(pos.line as usize)
+        .map_err(internal_error)?
+        + pos.character as usize;
+    let text_len = text.len_chars();
+    // XXX: not sure this is useful, rather be safe than sorry
+    let cursor_offset = if cursor_offset > text_len {
+        text_len
+    } else {
+        cursor_offset
+    };
+    if fim.enabled {
+        prompt.push_str(&fim.prefix);
+        prompt.push_str(&text.slice(0..cursor_offset).to_string());
+        prompt.push_str(&fim.suffix);
+        prompt.push_str(&text.slice(cursor_offset..text_len).to_string());
+        prompt.push_str(&fim.middle);
+        Ok(prompt)
+    } else {
+        prompt.push_str(&text.slice(0..cursor_offset).to_string());
+        Ok(prompt)
+    }
+}
+
+async fn request_completion(
+    http_client: &reqwest::Client,
+    model: &str,
+    request_params: RequestParams,
+    api_token: Option<String>,
+    prompt: String,
+) -> Result<Vec<Generation>> {
+    let mut req = http_client.post(model).json(&APIRequest {
+        inputs: prompt,
+        parameters: request_params,
+    });
+
+    if let Some(api_token) = api_token.clone() {
+        req = req.header(AUTHORIZATION, format!("Bearer {api_token}"))
+    }
+
+    let res = req.send().await.map_err(internal_error)?;
+
+    match res.json().await.map_err(internal_error)? {
+        APIResponse::Generations(gens) => Ok(gens),
+        APIResponse::Error(err) => Err(internal_error(err)),
+    }
+}
+
+fn parse_generations(
+    generations: Vec<Generation>,
+    prompt: &str,
+    stop_token: &str,
+) -> Vec<Completion> {
+    generations
+        .into_iter()
+        .map(|g| Completion {
+            generated_text: g.generated_text.replace(prompt, "").replace(stop_token, ""),
         })
-        .send()
-        .await
-        .map_err(internal_error)?
-        .json()
-        .await
-        .map_err(internal_error)?
+        .collect()
+}
+
+impl Backend {
+    async fn get_completions(&self, params: CompletionParams) -> Result<Vec<Completion>> {
+        info!("get_completions {params:?}");
+        let document_map = self.document_map.read().await;
+
+        let document = document_map
+            .get(params.text_document_position.text_document.uri.as_str())
+            .ok_or_else(|| internal_error("failed to find document"))?;
+        let file_path = file_path_comment(
+            params.text_document_position.text_document.uri,
+            document.language_id.clone(),
+            self.workspace_folders.read().await.as_ref(),
+            &self.language_comments,
+        );
+        let prompt = build_prompt(
+            params.text_document_position.position,
+            &document.text,
+            &params.fim,
+            file_path,
+        )?;
+        let stop_token = params.request_params.stop_token.clone();
+        let result = request_completion(
+            &self.http_client,
+            &params.model,
+            params.request_params,
+            params.api_token,
+            prompt.clone(),
+        )
+        .await?;
+
+        Ok(parse_generations(result, &prompt, &stop_token))
+    }
 }
 
 #[tower_lsp::async_trait]
 impl LanguageServer for Backend {
-    async fn initialize(&self, _: InitializeParams) -> Result<InitializeResult> {
-        tokio::fs::create_dir_all(get_cache_dir_path()?)
-            .await
-            .map_err(internal_error)?;
+    async fn initialize(&self, params: InitializeParams) -> Result<InitializeResult> {
+        *self.workspace_folders.write().await = params.workspace_folders;
         Ok(InitializeResult {
+            server_info: Some(ServerInfo {
+                name: "llm-ls".to_owned(),
+                version: Some("0.1.0".to_owned()),
+            }),
             capabilities: ServerCapabilities {
-                completion_provider: Some(CompletionOptions {
-                    resolve_provider: Some(false),
-                    trigger_characters: Some(vec![
-                        ".".to_owned(),
-                        "(".to_owned(),
-                        "{".to_owned(),
-                        ":".to_owned(),
-                        ":".to_owned(),
-                    ]),
-                    ..Default::default()
-                }),
+                text_document_sync: Some(TextDocumentSyncCapability::Kind(
+                    TextDocumentSyncKind::FULL,
+                )),
                 ..Default::default()
             },
             ..Default::default()
@@ -93,59 +268,62 @@ impl LanguageServer for Backend {
 
     async fn initialized(&self, _: InitializedParams) {
         self.client
-            .log_message(MessageType::INFO, "{ccserver} initialized")
+            .log_message(MessageType::INFO, "{llm-ls} initialized")
             .await;
-        if let Ok(cache_dir) = get_cache_dir_path() {
-            tokio::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(cache_dir.join("ccserver.log"))
-                .await
-                .unwrap()
-                .write_all(b"initialized\n")
-                .await
-                .unwrap();
-        }
+        let _ = info!("initialized");
     }
 
-    // XXX: tbd if we use code action or completion
-    async fn completion(&self, _: CompletionParams) -> Result<Option<CompletionResponse>> {
-        let result = request_completion(&self.http_client).await?;
-        if result.len() > 0 {
-            let generated_text = result[0].generated_text.clone();
+    // TODO:
+    // textDocument/didClose
 
-            tokio::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(get_cache_dir_path()?.join("ccserver.log"))
-                .await
-                .unwrap()
-                .write_all(format!("completion request: {generated_text}\n").as_bytes())
-                .await
-                .unwrap();
+    async fn did_open(&self, params: DidOpenTextDocumentParams) {
+        self.client
+            .log_message(MessageType::INFO, "{llm-ls} file opened")
+            .await;
+        let rope = ropey::Rope::from_str(&params.text_document.text);
+        let uri = params.text_document.uri.to_string();
+        *self
+            .document_map
+            .write()
+            .await
+            .entry(uri.clone())
+            .or_insert(Document::new("unknown".to_owned(), Rope::new())) =
+            Document::new(params.text_document.language_id, rope);
+        info!("{uri} opened");
+    }
 
-            Ok(Some(CompletionResponse::Array(vec![CompletionItem {
-                label: "ccserver completion".to_owned(),
-                insert_text: Some(generated_text.clone()),
-                kind: Some(CompletionItemKind::TEXT),
-                detail: Some(generated_text),
-                ..Default::default()
-            }])))
-        } else {
-            Ok(None)
-        }
+    async fn did_change(&self, params: DidChangeTextDocumentParams) {
+        self.client
+            .log_message(MessageType::INFO, "{llm-ls} file changed")
+            .await;
+        let rope = ropey::Rope::from_str(&params.content_changes[0].text);
+        let uri = params.text_document.uri.to_string();
+        let mut document_map = self.document_map.write().await;
+        let doc = document_map
+            .entry(uri.clone())
+            .or_insert(Document::new("unknown".to_owned(), Rope::new()));
+        doc.text = rope;
+        info!("{uri} changed");
+    }
+
+    async fn did_save(&self, params: DidSaveTextDocumentParams) {
+        self.client
+            .log_message(MessageType::INFO, "{llm-ls} file saved")
+            .await;
+        let uri = params.text_document.uri.to_string();
+        info!("{uri} saved");
+    }
+
+    async fn did_close(&self, params: DidCloseTextDocumentParams) {
+        self.client
+            .log_message(MessageType::INFO, "{llm-ls} file closed")
+            .await;
+        let uri = params.text_document.uri.to_string();
+        info!("{uri} closed");
     }
 
     async fn shutdown(&self) -> Result<()> {
-        tokio::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(get_cache_dir_path()?.join("ccserver.log"))
-            .await
-            .unwrap()
-            .write_all(b"shutdown\n")
-            .await
-            .unwrap();
+        let _ = info!("shutdown");
         Ok(())
     }
 }
@@ -155,11 +333,39 @@ async fn main() {
     let stdin = tokio::io::stdin();
     let stdout = tokio::io::stdout();
 
+    let home_dir = home::home_dir().ok_or(()).expect("failed to find home dir");
+    let cache_dir = home_dir.join(".cache/llm_ls");
+    tokio::fs::create_dir_all(&cache_dir)
+        .await
+        .expect("failed to create cache dir");
+
+    let log_file = rolling::never(cache_dir, "llm-ls.log");
+    let builder = tracing_subscriber::fmt()
+        .with_writer(log_file)
+        .with_target(true)
+        .with_line_number(true)
+        .with_env_filter(
+            EnvFilter::try_from_env("LOG_LEVEL").unwrap_or_else(|_| EnvFilter::new("info")),
+        );
+
+    builder
+        .json()
+        .flatten_event(true)
+        .with_current_span(false)
+        .with_span_list(true)
+        .init();
+
     let http_client = reqwest::Client::new();
 
-    let (service, socket) = LspService::new(|client| Backend {
+    let (service, socket) = LspService::build(|client| Backend {
         client,
+        document_map: Arc::new(RwLock::new(HashMap::new())),
         http_client,
-    });
+        workspace_folders: Arc::new(RwLock::new(None)),
+        language_comments: build_language_comments(),
+    })
+    .custom_method("llm-ls/getCompletions", Backend::get_completions)
+    .finish();
+
     Server::new(stdin, stdout, socket).serve(service).await;
 }
