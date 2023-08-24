@@ -1,3 +1,6 @@
+mod language_comments;
+
+use language_comments::build_language_comments;
 use reqwest::header::AUTHORIZATION;
 use ropey::Rope;
 use serde::{Deserialize, Serialize};
@@ -11,6 +14,12 @@ use tower_lsp::{Client, LanguageServer, LspService, Server};
 use tracing::{error, info};
 use tracing_appender::rolling;
 use tracing_subscriber::EnvFilter;
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct LanguageComment {
+    open: String,
+    close: Option<String>,
+}
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 struct RequestParams {
@@ -63,6 +72,8 @@ struct Backend {
     client: Client,
     document_map: Arc<RwLock<HashMap<String, Rope>>>,
     http_client: reqwest::Client,
+    workspace_folders: Arc<RwLock<Option<Vec<WorkspaceFolder>>>>,
+    language_comments: HashMap<String, LanguageComment>,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -78,6 +89,7 @@ struct CompletionParams {
     fim: FimParams,
     api_token: Option<String>,
     model: String,
+    language_id: String,
 }
 
 fn internal_error<E: Display>(err: E) -> Error {
@@ -90,18 +102,65 @@ fn internal_error<E: Display>(err: E) -> Error {
     }
 }
 
-fn build_prompt(pos: Position, text: &Rope) -> Result<String> {
-    let offset = text
-        .try_line_to_char(pos.line as usize)
-        .map_err(internal_error)?
-        + pos.character as usize;
-    let text_len = text.len_chars();
-    if offset == 0 {
-        Ok("".to_owned())
-    } else if offset > text_len {
-        Ok(text.slice(0..text_len).to_string())
+fn file_path_comment(
+    file_url: Url,
+    file_language_id: String,
+    workspace_folders: Option<&Vec<WorkspaceFolder>>,
+    language_comments: &HashMap<String, LanguageComment>,
+) -> String {
+    let mut file_path = file_url.path().to_owned();
+    let path_in_workspace = if let Some(workspace_folders) = workspace_folders {
+        for workspace_folder in workspace_folders {
+            let workspace_folder_path = workspace_folder.uri.path();
+            if file_path.starts_with(workspace_folder_path) {
+                file_path = file_path.replace(workspace_folder_path, "");
+                break;
+            }
+        }
+        file_path
     } else {
-        Ok(text.slice(0..offset).to_string())
+        file_path
+    };
+    let lc = match language_comments.get(&file_language_id) {
+        Some(id) => id.clone(),
+        None => LanguageComment {
+            open: "//".to_owned(),
+            close: None,
+        },
+    };
+    let mut header = lc.open;
+    header.push(' ');
+    header.push_str(&path_in_workspace);
+    if let Some(close) = lc.close {
+        header.push(' ');
+        header.push_str(&close);
+    }
+    header.push('\n');
+    header
+}
+
+fn build_prompt(pos: Position, text: &Rope, fim: &FimParams, file_path: String) -> Result<String> {
+    let mut prompt = file_path;
+    if fim.enabled {
+        let cursor_offset = text
+            .try_line_to_char(pos.line as usize)
+            .map_err(internal_error)?
+            + pos.character as usize;
+        let text_len = text.len_chars();
+        Ok(prompt)
+    } else {
+        let offset = text
+            .try_line_to_char(pos.line as usize)
+            .map_err(internal_error)?
+            + pos.character as usize;
+        let text_len = text.len_chars();
+        // XXX: not sure this is useful, rather be safe than sorry
+        if offset > text_len {
+            prompt.push_str(&text.slice(0..text_len).to_string());
+        } else {
+            prompt.push_str(&text.slice(0..offset).to_string());
+        }
+        Ok(prompt)
     }
 }
 
@@ -154,7 +213,18 @@ impl Backend {
         let text = document_map
             .get(params.text_document_position.text_document.uri.as_str())
             .ok_or_else(|| internal_error("failed to find document"))?;
-        let prompt = build_prompt(params.text_document_position.position, text)?;
+        let file_path = file_path_comment(
+            params.text_document_position.text_document.uri,
+            params.language_id,
+            self.workspace_folders.read().await.as_ref(),
+            &self.language_comments,
+        );
+        let prompt = build_prompt(
+            params.text_document_position.position,
+            text,
+            &params.fim,
+            file_path,
+        )?;
         let result = request_completion(
             &self.http_client,
             &params.model,
@@ -170,7 +240,8 @@ impl Backend {
 
 #[tower_lsp::async_trait]
 impl LanguageServer for Backend {
-    async fn initialize(&self, _: InitializeParams) -> Result<InitializeResult> {
+    async fn initialize(&self, params: InitializeParams) -> Result<InitializeResult> {
+        *self.workspace_folders.write().await = params.workspace_folders;
         Ok(InitializeResult {
             server_info: Some(ServerInfo {
                 name: "llm-ls".to_owned(),
@@ -281,6 +352,8 @@ async fn main() {
         client,
         document_map: Arc::new(RwLock::new(HashMap::new())),
         http_client,
+        workspace_folders: Arc::new(RwLock::new(None)),
+        language_comments: build_language_comments(),
     })
     .custom_method("llm-ls/getCompletions", Backend::get_completions)
     .finish();
