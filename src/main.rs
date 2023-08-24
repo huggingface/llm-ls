@@ -68,9 +68,21 @@ enum APIResponse {
 }
 
 #[derive(Debug)]
+struct Document {
+    language_id: String,
+    text: Rope,
+}
+
+impl Document {
+    fn new(language_id: String, text: Rope) -> Self {
+        Self { language_id, text }
+    }
+}
+
+#[derive(Debug)]
 struct Backend {
     client: Client,
-    document_map: Arc<RwLock<HashMap<String, Rope>>>,
+    document_map: Arc<RwLock<HashMap<String, Document>>>,
     http_client: reqwest::Client,
     workspace_folders: Arc<RwLock<Option<Vec<WorkspaceFolder>>>>,
     language_comments: HashMap<String, LanguageComment>,
@@ -89,7 +101,6 @@ struct CompletionParams {
     fim: FimParams,
     api_token: Option<String>,
     model: String,
-    language_id: String,
 }
 
 fn internal_error<E: Display>(err: E) -> Error {
@@ -207,18 +218,19 @@ impl Backend {
         info!("get_completions {params:?}");
         let document_map = self.document_map.read().await;
 
-        let text = document_map
+        let document = document_map
             .get(params.text_document_position.text_document.uri.as_str())
             .ok_or_else(|| internal_error("failed to find document"))?;
+        info!("document: {document:?}");
         let file_path = file_path_comment(
             params.text_document_position.text_document.uri,
-            params.language_id,
+            document.language_id.clone(),
             self.workspace_folders.read().await.as_ref(),
             &self.language_comments,
         );
         let prompt = build_prompt(
             params.text_document_position.position,
-            text,
+            &document.text,
             &params.fim,
             file_path,
         )?;
@@ -276,8 +288,9 @@ impl LanguageServer for Backend {
             .write()
             .await
             .entry(uri.clone())
-            .or_insert(Rope::new()) = rope.clone();
-        let _ = info!("{uri} opened");
+            .or_insert(Document::new("unknown".to_owned(), Rope::new())) =
+            Document::new(params.text_document.language_id, rope);
+        info!("{uri} opened");
     }
 
     async fn did_change(&self, params: DidChangeTextDocumentParams) {
@@ -286,13 +299,12 @@ impl LanguageServer for Backend {
             .await;
         let rope = ropey::Rope::from_str(&params.content_changes[0].text);
         let uri = params.text_document.uri.to_string();
-        *self
-            .document_map
-            .write()
-            .await
+        let mut document_map = self.document_map.write().await;
+        let doc = document_map
             .entry(uri.clone())
-            .or_insert(Rope::new()) = rope;
-        let _ = info!("{uri} changed");
+            .or_insert(Document::new("unknown".to_owned(), Rope::new()));
+        doc.text = rope;
+        info!("{uri} changed");
     }
 
     async fn did_save(&self, params: DidSaveTextDocumentParams) {
@@ -300,7 +312,7 @@ impl LanguageServer for Backend {
             .log_message(MessageType::INFO, "{llm-ls} file saved")
             .await;
         let uri = params.text_document.uri.to_string();
-        let _ = info!("{uri} saved");
+        info!("{uri} saved");
     }
 
     async fn did_close(&self, params: DidCloseTextDocumentParams) {
@@ -308,7 +320,7 @@ impl LanguageServer for Backend {
             .log_message(MessageType::INFO, "{llm-ls} file closed")
             .await;
         let uri = params.text_document.uri.to_string();
-        let _ = info!("{uri} closed");
+        info!("{uri} closed");
     }
 
     async fn shutdown(&self) -> Result<()> {
