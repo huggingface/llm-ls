@@ -221,7 +221,6 @@ impl Backend {
         let document = document_map
             .get(params.text_document_position.text_document.uri.as_str())
             .ok_or_else(|| internal_error("failed to find document"))?;
-        info!("document: {document:?}");
         let file_path = file_path_comment(
             params.text_document_position.text_document.uri,
             document.language_id.clone(),
