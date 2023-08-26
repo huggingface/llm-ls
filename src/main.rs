@@ -15,13 +15,6 @@ use tracing::{error, info};
 use tracing_appender::rolling;
 use tracing_subscriber::EnvFilter;
 
-enum CompletionContext {
-    /// before, after
-    BetweenCharacters(char, char),
-    SingleLine,
-    MultiLine,
-}
-
 #[derive(Clone, Debug, Deserialize)]
 pub struct LanguageComment {
     open: String,
@@ -180,24 +173,6 @@ fn file_path_comment(
     commented_path
 }
 
-fn determine_completion_context(text: &Rope, pos: Position) -> CompletionContext {
-    let current_line = text.line(pos.line as usize);
-
-    let col = pos.character as usize;
-    let left_of_cursor = &current_line.slice(..col).to_string();
-    let right_of_cursor = &current_line.slice(col..).to_string();
-
-    let whitespace_before = left_of_cursor.trim().is_empty();
-    let whitespace_after = right_of_cursor.trim().is_empty();
-    if whitespace_before && whitespace_after {
-        CompletionContext::MultiLine
-    } else if !whitespace_before && whitespace_after {
-        CompletionContext::SingleLine
-    } else {
-        CompletionContext::BetweenCharacters(current_line.char(col - 1), current_line.char(col))
-    }
-}
-
 fn build_prompt(pos: Position, text: &Rope, fim: &FimParams, file_path: String) -> Result<String> {
     let mut prompt = file_path;
     let cursor_offset = text
@@ -230,18 +205,10 @@ async fn request_completion(
     request_params: RequestParams,
     api_token: Option<String>,
     prompt: String,
-    completion_context: CompletionContext,
 ) -> Result<Vec<Generation>> {
-    let mut params: APIParams = request_params.into();
-    match completion_context {
-        CompletionContext::BetweenCharacters(_, a) => params.stop.push(a.to_string()),
-        CompletionContext::SingleLine => params.stop.push("\n".to_owned()),
-        CompletionContext::MultiLine => (),
-    }
-    info!("api request params: {params:?}");
     let mut req = http_client.post(model).json(&APIRequest {
         inputs: prompt,
-        parameters: params,
+        parameters: request_params.into(),
     });
 
     if let Some(api_token) = api_token.clone() {
@@ -286,15 +253,12 @@ impl Backend {
             file_path,
         )?;
         let stop_token = params.request_params.stop_token.clone();
-        let completion_context =
-            determine_completion_context(&document.text, params.text_document_position.position);
         let result = request_completion(
             &self.http_client,
             &params.model,
             params.request_params,
             params.api_token,
             prompt.clone(),
-            completion_context,
         )
         .await?;
 
