@@ -370,9 +370,7 @@ fn build_url(model: &str) -> String {
     if model.starts_with("http://") || model.starts_with("https://") {
         model.to_owned()
     } else {
-        let mut url = "https://api-inference.huggingface.co/models/".to_owned();
-        url.push_str(model);
-        url
+        format!("https://api-inference.huggingface.co/models/{model}")
     }
 }
 
