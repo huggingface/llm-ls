@@ -145,7 +145,7 @@ fn internal_error<E: Display>(err: E) -> Error {
 
 fn file_path_comment(
     file_url: Url,
-    file_language_id: String,
+    file_language_id: &str,
     workspace_folders: Option<&Vec<WorkspaceFolder>>,
     language_comments: &HashMap<String, LanguageComment>,
 ) -> String {
@@ -162,7 +162,7 @@ fn file_path_comment(
     } else {
         file_path
     };
-    let lc = match language_comments.get(&file_language_id) {
+    let lc = match language_comments.get(file_language_id) {
         Some(id) => id.clone(),
         None => LanguageComment {
             open: "//".to_owned(),
@@ -384,7 +384,7 @@ impl Backend {
             .ok_or_else(|| internal_error("failed to find document"))?;
         let file_path = file_path_comment(
             params.text_document_position.text_document.uri,
-            document.language_id.clone(),
+            &document.language_id,
             self.workspace_folders.read().await.as_ref(),
             &self.language_comments,
         );
@@ -411,7 +411,7 @@ impl Backend {
             &params.model,
             params.request_params,
             params.api_token.as_ref(),
-            prompt.clone(),
+            prompt,
         )
         .await?;
 
@@ -510,7 +510,7 @@ async fn main() {
         .await
         .expect("failed to create cache dir");
 
-    let log_file = rolling::never(cache_dir.clone(), "llm-ls.log");
+    let log_file = rolling::never(&cache_dir, "llm-ls.log");
     let builder = tracing_subscriber::fmt()
         .with_writer(log_file)
         .with_target(true)
