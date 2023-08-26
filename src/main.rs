@@ -15,6 +15,13 @@ use tracing::{error, info};
 use tracing_appender::rolling;
 use tracing_subscriber::EnvFilter;
 
+enum CompletionContext {
+    /// before, after
+    BetweenCharacters(char, char),
+    SingleLine,
+    MultiLine,
+}
+
 #[derive(Clone, Debug, Deserialize)]
 pub struct LanguageComment {
     open: String,
@@ -38,10 +45,33 @@ struct FimParams {
     suffix: String,
 }
 
+#[derive(Debug, Serialize)]
+struct APIParams {
+    max_new_tokens: u32,
+    temperature: f32,
+    do_sample: bool,
+    top_p: f32,
+    stop: Vec<String>,
+    return_full_text: bool,
+}
+
+impl From<RequestParams> for APIParams {
+    fn from(params: RequestParams) -> Self {
+        Self {
+            max_new_tokens: params.max_new_tokens,
+            temperature: params.temperature,
+            do_sample: params.do_sample,
+            top_p: params.top_p,
+            stop: vec![params.stop_token.clone()],
+            return_full_text: false,
+        }
+    }
+}
+
 #[derive(Serialize)]
 struct APIRequest {
     inputs: String,
-    parameters: RequestParams,
+    parameters: APIParams,
 }
 
 #[derive(Debug, Deserialize)]
@@ -150,6 +180,24 @@ fn file_path_comment(
     commented_path
 }
 
+fn determine_completion_context(text: &Rope, pos: Position) -> CompletionContext {
+    let current_line = text.line(pos.line as usize);
+
+    let col = pos.character as usize;
+    let left_of_cursor = &current_line.slice(..col).to_string();
+    let right_of_cursor = &current_line.slice(col..).to_string();
+
+    let whitespace_before = left_of_cursor.trim().is_empty();
+    let whitespace_after = right_of_cursor.trim().is_empty();
+    if whitespace_before && whitespace_after {
+        CompletionContext::MultiLine
+    } else if !whitespace_before && whitespace_after {
+        CompletionContext::SingleLine
+    } else {
+        CompletionContext::BetweenCharacters(current_line.char(col - 1), current_line.char(col))
+    }
+}
+
 fn build_prompt(pos: Position, text: &Rope, fim: &FimParams, file_path: String) -> Result<String> {
     let mut prompt = file_path;
     let cursor_offset = text
@@ -182,10 +230,18 @@ async fn request_completion(
     request_params: RequestParams,
     api_token: Option<String>,
     prompt: String,
+    completion_context: CompletionContext,
 ) -> Result<Vec<Generation>> {
+    let mut params: APIParams = request_params.into();
+    match completion_context {
+        CompletionContext::BetweenCharacters(_, a) => params.stop.push(a.to_string()),
+        CompletionContext::SingleLine => params.stop.push("\n".to_owned()),
+        CompletionContext::MultiLine => (),
+    }
+    info!("api request params: {params:?}");
     let mut req = http_client.post(model).json(&APIRequest {
         inputs: prompt,
-        parameters: request_params,
+        parameters: params,
     });
 
     if let Some(api_token) = api_token.clone() {
@@ -200,15 +256,11 @@ async fn request_completion(
     }
 }
 
-fn parse_generations(
-    generations: Vec<Generation>,
-    prompt: &str,
-    stop_token: &str,
-) -> Vec<Completion> {
+fn parse_generations(generations: Vec<Generation>, stop_token: &str) -> Vec<Completion> {
     generations
         .into_iter()
         .map(|g| Completion {
-            generated_text: g.generated_text.replace(prompt, "").replace(stop_token, ""),
+            generated_text: g.generated_text.replace(stop_token, ""),
         })
         .collect()
 }
@@ -234,16 +286,19 @@ impl Backend {
             file_path,
         )?;
         let stop_token = params.request_params.stop_token.clone();
+        let completion_context =
+            determine_completion_context(&document.text, params.text_document_position.position);
         let result = request_completion(
             &self.http_client,
             &params.model,
             params.request_params,
             params.api_token,
             prompt.clone(),
+            completion_context,
         )
         .await?;
 
-        Ok(parse_generations(result, &prompt, &stop_token))
+        Ok(parse_generations(result, &stop_token))
     }
 }
 
