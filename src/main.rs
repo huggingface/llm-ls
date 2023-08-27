@@ -1,6 +1,3 @@
-mod language_comments;
-
-use language_comments::build_language_comments;
 use reqwest::header::AUTHORIZATION;
 use ropey::Rope;
 use serde::{Deserialize, Serialize};
@@ -17,12 +14,6 @@ use tower_lsp::{Client, LanguageServer, LspService, Server};
 use tracing::{error, info};
 use tracing_appender::rolling;
 use tracing_subscriber::EnvFilter;
-
-#[derive(Clone, Debug, Deserialize)]
-pub struct LanguageComment {
-    open: String,
-    close: Option<String>,
-}
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 struct RequestParams {
@@ -112,7 +103,6 @@ struct Backend {
     document_map: Arc<RwLock<HashMap<String, Document>>>,
     http_client: reqwest::Client,
     workspace_folders: Arc<RwLock<Option<Vec<WorkspaceFolder>>>>,
-    language_comments: HashMap<String, LanguageComment>,
     tokenizer_map: Arc<RwLock<HashMap<String, Tokenizer>>>,
 }
 
@@ -143,45 +133,10 @@ fn internal_error<E: Display>(err: E) -> Error {
     }
 }
 
-fn file_path_comment(
-    file_url: Url,
-    file_language_id: &str,
-    workspace_folders: Option<&Vec<WorkspaceFolder>>,
-    language_comments: &HashMap<String, LanguageComment>,
-) -> String {
-    let mut file_path = file_url.path().to_owned();
-    let path_in_workspace = if let Some(workspace_folders) = workspace_folders {
-        for workspace_folder in workspace_folders {
-            let workspace_folder_path = workspace_folder.uri.path();
-            if file_path.starts_with(workspace_folder_path) {
-                file_path = file_path.replace(workspace_folder_path, "");
-                break;
-            }
-        }
-        file_path
-    } else {
-        file_path
-    };
-    let lc = match language_comments.get(file_language_id) {
-        Some(id) => id.clone(),
-        None => LanguageComment {
-            open: "//".to_owned(),
-            close: None,
-        },
-    };
-    let close = if let Some(close) = lc.close {
-        format!(" {close}")
-    } else {
-        "".to_owned()
-    };
-    format!("{} {path_in_workspace}{close}\n", lc.open)
-}
-
 fn build_prompt(
     pos: Position,
     text: &Rope,
     fim: &FimParams,
-    file_path: String,
     tokenizer: Tokenizer,
     context_window: usize,
 ) -> Result<String> {
@@ -229,8 +184,7 @@ fn build_prompt(
             after_line = after_iter.next();
         }
         Ok(format!(
-            "{}{}{}{}{}{}",
-            file_path,
+            "{}{}{}{}{}",
             fim.prefix,
             before.into_iter().rev().collect::<Vec<_>>().join(""),
             fim.suffix,
@@ -257,11 +211,7 @@ fn build_prompt(
             token_count -= tokens;
             before.push(line);
         }
-        Ok(format!(
-            "{}{}",
-            file_path,
-            &before.into_iter().rev().collect::<Vec<_>>().join("")
-        ))
+        Ok(before.into_iter().rev().collect::<Vec<_>>().join(""))
     }
 }
 
@@ -382,12 +332,6 @@ impl Backend {
         let document = document_map
             .get(params.text_document_position.text_document.uri.as_str())
             .ok_or_else(|| internal_error("failed to find document"))?;
-        let file_path = file_path_comment(
-            params.text_document_position.text_document.uri,
-            &document.language_id,
-            self.workspace_folders.read().await.as_ref(),
-            &self.language_comments,
-        );
         let tokenizer = get_tokenizer(
             &params.model,
             &mut *self.tokenizer_map.write().await,
@@ -401,7 +345,6 @@ impl Backend {
             params.text_document_position.position,
             &document.text,
             &params.fim,
-            file_path,
             tokenizer,
             params.context_window,
         )?;
@@ -534,7 +477,6 @@ async fn main() {
         document_map: Arc::new(RwLock::new(HashMap::new())),
         http_client,
         workspace_folders: Arc::new(RwLock::new(None)),
-        language_comments: build_language_comments(),
         tokenizer_map: Arc::new(RwLock::new(HashMap::new())),
     })
     .custom_method("llm-ls/getCompletions", Backend::get_completions)
