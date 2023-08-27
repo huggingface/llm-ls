@@ -241,7 +241,7 @@ fn build_prompt(
         let mut token_count = context_window;
         let mut before = vec![];
         let mut first = true;
-        for mut line in text.lines_at(pos.line as usize).reversed() {
+        for mut line in text.lines_at(pos.line as usize + 1).reversed() {
             if first {
                 line = line.slice(0..pos.character as usize);
                 first = false;
@@ -426,7 +426,7 @@ impl LanguageServer for Backend {
         Ok(InitializeResult {
             server_info: Some(ServerInfo {
                 name: "llm-ls".to_owned(),
-                version: Some("0.1.0".to_owned()),
+                version: Some("0.1.1".to_owned()),
             }),
             capabilities: ServerCapabilities {
                 text_document_sync: Some(TextDocumentSyncCapability::Kind(
