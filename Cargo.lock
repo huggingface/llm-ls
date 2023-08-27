@@ -1021,7 +1021,7 @@ checksum = "57bcfdad1b858c2db7c38303a6d2ad4dfaf5eb53dfeb0910128b2c26d6158503"
 
 [[package]]
 name = "llm-ls"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "home",
  "reqwest",
