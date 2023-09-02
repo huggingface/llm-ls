@@ -15,6 +15,9 @@ use tracing::{error, info};
 use tracing_appender::rolling;
 use tracing_subscriber::EnvFilter;
 
+// TODO:
+// * handle slice panic
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 struct RequestParams {
     max_new_tokens: u32,
