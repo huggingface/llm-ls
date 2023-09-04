@@ -34,12 +34,12 @@ jobs:
             target: x86_64-unknown-linux-gnu
             code-target: linux-x64
             container: ubuntu:18.04
-          # - os: ubuntu-20.04
-          #   target: aarch64-unknown-linux-gnu
-          #   code-target: linux-arm64
-          # - os: ubuntu-20.04
-          #   target: arm-unknown-linux-gnueabihf
-          #   code-target: linux-armhf
+          - os: ubuntu-20.04
+            target: aarch64-unknown-linux-gnu
+            code-target: linux-arm64
+          - os: ubuntu-20.04
+            target: arm-unknown-linux-gnueabihf
+            code-target: linux-armhf
           - os: macos-11
             target: x86_64-apple-darwin
             code-target: darwin-x64
@@ -80,11 +80,11 @@ jobs:
 
       - name: Install AArch64 target toolchain
         if: matrix.target == 'aarch64-unknown-linux-gnu'
-        run: sudo apt-get install gcc-aarch64-linux-gnu libssl-dev
+        run: sudo apt-get install gcc-aarch64-linux-gnu libssl-dev pkg-config
 
       - name: Install ARM target toolchain
         if: matrix.target == 'arm-unknown-linux-gnueabihf'
-        run: sudo apt-get install gcc-arm-linux-gnueabihf libssl-dev
+        run: sudo apt-get install gcc-arm-linux-gnueabihf libssl-dev pkg-config
 
       - name: Dist
         run: cargo xtask dist
@@ -109,7 +109,7 @@ jobs:
 
     steps:
       - name: Install dependencies
-        run: apk add --no-cache git clang lld musl-dev nodejs npm openssl-dev pkgconfig
+        run: apk add --no-cache git clang lld musl-dev nodejs npm openssl-dev pkgconfig g++
 
       - name: Checkout repository
         uses: actions/checkout@v3
