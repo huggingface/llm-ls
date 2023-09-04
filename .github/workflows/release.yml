@@ -79,8 +79,12 @@ jobs:
         run: sudo apt-get update
 
       - name: Install openssl
-        if: matrix.os == 'ubuntu-20.04'
+        if: matrix.container == 'ubuntu:18.04'
         run: apt-get install libssl-dev
+
+      - name: Install openssl
+        if: matrix.os == 'ubuntu-20.04' && matrix.container != 'ubuntu:18.04'
+        run: sudo apt-get install libssl-dev
 
       - name: Install AArch64 target toolchain
         if: matrix.target == 'aarch64-unknown-linux-gnu'
