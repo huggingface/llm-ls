@@ -78,13 +78,17 @@ jobs:
         if: matrix.target == 'aarch64-unknown-linux-gnu' || matrix.target == 'arm-unknown-linux-gnueabihf'
         run: sudo apt-get update
 
+      - name: Install openssl
+        if: matrix.os == 'ubuntu-20.04'
+        run: apt-get install libssl-dev
+
       - name: Install AArch64 target toolchain
         if: matrix.target == 'aarch64-unknown-linux-gnu'
-        run: sudo apt-get install gcc-aarch64-linux-gnu libssl-dev pkg-config
+        run: sudo apt-get install gcc-aarch64-linux-gnu
 
       - name: Install ARM target toolchain
         if: matrix.target == 'arm-unknown-linux-gnueabihf'
-        run: sudo apt-get install gcc-arm-linux-gnueabihf libssl-dev pkg-config
+        run: sudo apt-get install gcc-arm-linux-gnueabihf
 
       - name: Dist
         run: cargo xtask dist
