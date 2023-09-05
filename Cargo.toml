@@ -1,19 +1,25 @@
-[package]
-name = "llm-ls"
-version = "0.1.1"
+[workspace]
+members = ["xtask/", "crates/*"]
+resolver = "2"
+
+[workspace.package]
+rust-version = "1.71"
 edition = "2021"
+license = "Apache-2.0"
+authors = ["Luc Georges <luc@huggingface.co>"]
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[profile.dev]
+# Disabling debug info speeds up builds a bunch,
+# and we don't rely on it for debugging that much.
+debug = 0
 
-[dependencies]
-home = "0.5"
-ropey = "1.6"
-serde = { version = "1", features = ["derive"] }
-reqwest = { version = "0.11", features = ["json"] }
-tokenizers = "0.13"
-tokio = { version = "1", features = ["fs", "io-std", "io-util", "macros", "rt-multi-thread"] }
-tower-lsp = "0.20"
-tracing = "0.1"
-tracing-appender = "0.2"
-tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+[profile.dev.package]
+# This speeds up `cargo xtask dist`.
+miniz_oxide.opt-level = 3
 
+[profile.release]
+incremental = true
+# Set this to 1 or 2 to get more useful backtraces in debugger.
+debug = 0
+
+[workspace.dependencies]
