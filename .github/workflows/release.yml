@@ -138,6 +138,12 @@ jobs:
       - run: echo "HEAD_SHA=$(git rev-parse HEAD)" >> $GITHUB_ENV
       - run: 'echo "HEAD_SHA: $HEAD_SHA"'
 
+      - name: Split branch name
+        env:
+          BRANCH: ${{ github.ref_name }}
+        id: split
+        run: echo "::set-output name=tag::${BRANCH##*/}"
+
       - uses: actions/download-artifact@v1
         with:
           name: dist-aarch64-apple-darwin
@@ -180,5 +186,5 @@ jobs:
         uses: ./.github/actions/github-release
         with:
           files: "dist/*"
-          name: ${{ env.TAG }}
+          name: ${{ steps.split.outputs.tag }}
           token: ${{ secrets.GITHUB_TOKEN }}
