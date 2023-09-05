@@ -89,6 +89,7 @@ enum APIResponse {
 
 #[derive(Debug)]
 struct Document {
+    #[allow(dead_code)]
     language_id: String,
     text: Rope,
 }
