@@ -84,6 +84,7 @@ impl Display for APIError {
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
 enum APIResponse {
+    Generation(Generation),
     Generations(Vec<Generation>),
     Error(APIError),
 }
@@ -240,6 +241,7 @@ async fn request_completion(
     let res = req.send().await.map_err(internal_error)?;
 
     match res.json().await.map_err(internal_error)? {
+        APIResponse::Generation(gen) => Ok(vec![gen]),
         APIResponse::Generations(gens) => Ok(gens),
         APIResponse::Error(err) => Err(internal_error(err)),
     }
@@ -374,7 +376,7 @@ impl LanguageServer for Backend {
         Ok(InitializeResult {
             server_info: Some(ServerInfo {
                 name: "llm-ls".to_owned(),
-                version: Some("0.1.1".to_owned()),
+                version: Some("0.0.2".to_owned()),
             }),
             capabilities: ServerCapabilities {
                 text_document_sync: Some(TextDocumentSyncCapability::Kind(
