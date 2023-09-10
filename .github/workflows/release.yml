@@ -33,9 +33,9 @@ jobs:
           - os: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
             code-target: linux-x64
-          # - os: ubuntu-20.04
-          #   target: aarch64-unknown-linux-gnu
-          #   code-target: linux-arm64
+          - os: ubuntu-22.04
+            target: aarch64-unknown-linux-gnu
+            code-target: linux-arm64
           # - os: ubuntu-20.04
           #   target: arm-unknown-linux-gnueabihf
           #   code-target: linux-armhf
@@ -69,9 +69,9 @@ jobs:
         if: ${{ contains(matrix.os, 'ubuntu') }}
         run: sudo apt-get update -y
 
-      # - name: Install AArch64 target toolchain
-      #   if: matrix.target == 'aarch64-unknown-linux-gnu'
-      #   run: sudo apt-get install gcc-aarch64-linux-gnu
+      - name: Install AArch64 target toolchain
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: sudo apt-get install gcc-aarch64-linux-gnu libc6-dev-arm64-cross
 
       # - name: Install ARM target toolchain
       #   if: matrix.target == 'arm-unknown-linux-gnueabihf'
@@ -151,10 +151,10 @@ jobs:
         with:
           name: dist-x86_64-unknown-linux-musl
           path: dist
-      # - uses: actions/download-artifact@v1
-      #   with:
-      #     name: dist-aarch64-unknown-linux-gnu
-      #     path: dist
+      - uses: actions/download-artifact@v1
+        with:
+          name: dist-aarch64-unknown-linux-gnu
+          path: dist
       # - uses: actions/download-artifact@v1
       #   with:
       #     name: dist-arm-unknown-linux-gnueabihf
