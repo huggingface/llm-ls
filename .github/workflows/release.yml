@@ -30,10 +30,6 @@ jobs:
           # - os: windows-latest
           #   target: aarch64-pc-windows-msvc
           #   code-target: win32-arm64
-          - os: ubuntu-20.04
-            target: x86_64-unknown-linux-gnu
-            code-target: linux-x64
-            container: ubuntu:18.04
           # - os: ubuntu-20.04
           #   target: aarch64-unknown-linux-gnu
           #   code-target: linux-arm64
@@ -60,14 +56,6 @@ jobs:
         with:
           fetch-depth: ${{ env.FETCH_DEPTH }}
 
-      - name: Install toolchain dependencies
-        if: matrix.container == 'ubuntu:18.04'
-        shell: bash
-        run: |
-          apt-get update && apt-get install -y build-essential curl
-          curl --proto '=https' --tlsv1.2 --retry 10 --retry-connrefused -fsSL "https://sh.rustup.rs" | sh -s -- --profile minimal --default-toolchain none -y
-          echo "${CARGO_HOME:-$HOME/.cargo}/bin" >> $GITHUB_PATH
-
       - name: Install Rust toolchain
         run: |
           rustup update --no-self-update stable
@@ -93,6 +81,41 @@ jobs:
         uses: actions/upload-artifact@v1
         with:
           name: dist-${{ matrix.target }}
+          path: ./dist
+
+  dist-x86_64-unknown-linux:
+    name: dist (x86_64-unknown-linux)
+    runs-on: ubuntu-20.04
+    container: ubuntu:18.04
+    env:
+      RUSTFLAGS: "-C link-args=-fstack-protector-all -lssp"
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: ${{ env.FETCH_DEPTH }}
+
+      - name: Install toolchain dependencies
+        shell: bash
+        run: |
+          apt-get update && apt-get install -y build-essential curl
+          curl --proto '=https' --tlsv1.2 --retry 10 --retry-connrefused -fsSL "https://sh.rustup.rs" | sh -s -- --profile minimal --default-toolchain none -y
+          echo "${CARGO_HOME:-$HOME/.cargo}/bin" >> $GITHUB_PATH
+
+      - name: Install Rust toolchain
+        run: |
+          rustup update --no-self-update stable
+          rustup target add x86_64-unknown-linux-gnu
+          rustup component add rust-src
+
+      - name: Dist
+        run: cargo xtask dist
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v1
+        with:
+          name: dist-x86_64-unknown-linux-gnu
           path: ./dist
 
   dist-x86_64-unknown-linux-musl:
