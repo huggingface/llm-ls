@@ -9,8 +9,7 @@ name = "llm-ls"
 [dependencies]
 home = "0.5"
 ropey = "1.6"
-openssl = { version = "0.10", features = ["vendored"] }
-reqwest = { version = "0.11", features = ["json"] }
+reqwest = { version = "0.11", default-features = false, features = ["json", "rustls-tls"] }
 serde = { version = "1", features = ["derive"] }
 tokenizers = { version = "0.13", default-features = false, features = ["onig"] }
 tokio = { version = "1", features = ["fs", "io-std", "io-util", "macros", "rt-multi-thread"] }
