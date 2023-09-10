@@ -27,9 +27,9 @@ jobs:
           - os: windows-latest
             target: i686-pc-windows-msvc
             code-target: win32-ia32
-          # - os: windows-latest
-          #   target: aarch64-pc-windows-msvc
-          #   code-target: win32-arm64
+          - os: windows-latest
+            target: aarch64-pc-windows-msvc
+            code-target: win32-arm64
           - os: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
             code-target: linux-x64
@@ -167,10 +167,10 @@ jobs:
         with:
           name: dist-i686-pc-windows-msvc
           path: dist
-      # - uses: actions/download-artifact@v1
-      #   with:
-      #     name: dist-aarch64-pc-windows-msvc
-      #     path: dist
+      - uses: actions/download-artifact@v1
+        with:
+          name: dist-aarch64-pc-windows-msvc
+          path: dist
       - run: ls -al ./dist
 
       - name: Publish Release
