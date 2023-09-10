@@ -66,7 +66,7 @@ jobs:
           rustup component add rust-src
 
       - name: Update apt repositories
-        if: ${{ contains(matrix.os, 'ubuntu') }}
+        if: contains(matrix.os, 'ubuntu')
         run: sudo apt-get update -y
 
       - name: Install AArch64 target toolchain
@@ -76,6 +76,12 @@ jobs:
       - name: Install ARM target toolchain
         if: matrix.target == 'arm-unknown-linux-gnueabihf'
         run: sudo apt-get install gcc-arm-linux-gnueabihf
+
+      - if: matrix.target == 'aarch64-pc-windows-msvc'
+        run: |
+          echo "C:\Program Files (x86)\Microsoft Visual Studio\2019\Enterprise\VC\Tools\Llvm\x64\bin" >> $GITHUB_PATH
+          echo "RUSTFLAGS=-C target-feature=+crt-static" >> $GITHUB_ENV
+        shell: bash
 
       - name: Dist
         run: cargo xtask dist
