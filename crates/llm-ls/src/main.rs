@@ -5,13 +5,14 @@ use std::collections::HashMap;
 use std::fmt::Display;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Instant;
 use tokenizers::Tokenizer;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::RwLock;
 use tower_lsp::jsonrpc::{Error, Result};
 use tower_lsp::lsp_types::*;
 use tower_lsp::{Client, LanguageServer, LspService, Server};
-use tracing::{error, info};
+use tracing::{debug, error, info};
 use tracing_appender::rolling;
 use tracing_subscriber::EnvFilter;
 
@@ -145,6 +146,7 @@ fn build_prompt(
     tokenizer: Arc<Tokenizer>,
     context_window: usize,
 ) -> Result<String> {
+    let t = Instant::now();
     if fim.enabled {
         let mut token_count = context_window;
         let mut before_iter = text.lines_at(pos.line as usize + 1).reversed();
@@ -189,14 +191,17 @@ fn build_prompt(
             before_line = before_iter.next();
             after_line = after_iter.next();
         }
-        Ok(format!(
+        let prompt = format!(
             "{}{}{}{}{}",
             fim.prefix,
             before.into_iter().rev().collect::<Vec<_>>().join(""),
             fim.suffix,
             after,
             fim.middle
-        ))
+        );
+        let time = t.elapsed().as_millis();
+        info!(build_prompt_ms = time, "built prompt in {time} ms");
+        Ok(prompt)
     } else {
         let mut token_count = context_window;
         let mut before = vec![];
@@ -218,7 +223,10 @@ fn build_prompt(
             token_count -= tokens;
             before.push(line);
         }
-        Ok(before.into_iter().rev().collect::<Vec<_>>().join(""))
+        let prompt = before.into_iter().rev().collect::<Vec<_>>().join("");
+        let time = t.elapsed().as_millis();
+        info!(build_prompt_ms = time, "built prompt in {time} ms");
+        Ok(prompt)
     }
 }
 
@@ -389,7 +397,7 @@ impl LanguageServer for Backend {
         self.client
             .log_message(MessageType::INFO, "{llm-ls} initialized")
             .await;
-        let _ = info!("initialized");
+        let _ = info!("initialized language server");
     }
 
     // TODO:
@@ -442,7 +450,7 @@ impl LanguageServer for Backend {
     }
 
     async fn shutdown(&self) -> Result<()> {
-        let _ = info!("shutdown");
+        let _ = debug!("shutdown");
         Ok(())
     }
 }
@@ -464,7 +472,7 @@ async fn main() {
         .with_target(true)
         .with_line_number(true)
         .with_env_filter(
-            EnvFilter::try_from_env("LOG_LEVEL").unwrap_or_else(|_| EnvFilter::new("info")),
+            EnvFilter::try_from_env("LLM_LOG_LEVEL").unwrap_or_else(|_| EnvFilter::new("warn")),
         );
 
     builder
