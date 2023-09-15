@@ -107,6 +107,7 @@ struct Backend {
     client: Client,
     document_map: Arc<RwLock<HashMap<String, Document>>>,
     http_client: reqwest::Client,
+    unsafe_http_client: reqwest::Client,
     workspace_folders: Arc<RwLock<Option<Vec<WorkspaceFolder>>>>,
     tokenizer_map: Arc<RwLock<HashMap<String, Arc<Tokenizer>>>>,
 }
@@ -127,6 +128,7 @@ struct CompletionParams {
     model_eos: String,
     tokenizer_path: Option<String>,
     context_window: usize,
+    tls_skip_verify_insecure: bool,
 }
 
 fn internal_error<E: Display>(err: E) -> Error {
@@ -362,8 +364,15 @@ impl Backend {
             tokenizer,
             params.context_window,
         )?;
+
+        let http_client = if params.tls_skip_verify_insecure {
+            info!("tls verification is disabled");
+            &self.unsafe_http_client
+        } else {
+            &self.http_client
+        };
         let result = request_completion(
-            &self.http_client,
+            http_client,
             &params.model,
             params.request_params,
             params.api_token.as_ref(),
@@ -483,12 +492,17 @@ async fn main() {
         .init();
 
     let http_client = reqwest::Client::new();
+    let unsafe_http_client = reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .build()
+        .expect("failed to build reqwest unsafe client");
 
     let (service, socket) = LspService::build(|client| Backend {
         cache_dir,
         client,
         document_map: Arc::new(RwLock::new(HashMap::new())),
         http_client,
+        unsafe_http_client,
         workspace_folders: Arc::new(RwLock::new(None)),
         tokenizer_map: Arc::new(RwLock::new(HashMap::new())),
     })
