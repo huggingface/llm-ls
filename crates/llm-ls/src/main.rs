@@ -391,7 +391,7 @@ impl LanguageServer for Backend {
         Ok(InitializeResult {
             server_info: Some(ServerInfo {
                 name: "llm-ls".to_owned(),
-                version: Some("0.0.2".to_owned()),
+                version: Some("0.0.3".to_owned()),
             }),
             capabilities: ServerCapabilities {
                 text_document_sync: Some(TextDocumentSyncCapability::Kind(
