@@ -125,7 +125,7 @@ struct CompletionParams {
     fim: FimParams,
     api_token: Option<String>,
     model: String,
-    model_eos: String,
+    tokens_to_clear: Vec<String>,
     tokenizer_path: Option<String>,
     context_window: usize,
     tls_skip_verify_insecure: bool,
@@ -257,11 +257,15 @@ async fn request_completion(
     }
 }
 
-fn parse_generations(generations: Vec<Generation>, eos: &str) -> Vec<Completion> {
+fn parse_generations(generations: Vec<Generation>, tokens_to_clear: &[String]) -> Vec<Completion> {
     generations
         .into_iter()
-        .map(|g| Completion {
-            generated_text: g.generated_text.replace(eos, ""),
+        .map(|g| {
+            let mut generated_text = g.generated_text;
+            for token in tokens_to_clear {
+                generated_text = generated_text.replace(token, "")
+            }
+            Completion { generated_text }
         })
         .collect()
 }
@@ -380,7 +384,7 @@ impl Backend {
         )
         .await?;
 
-        Ok(parse_generations(result, &params.model_eos))
+        Ok(parse_generations(result, &params.tokens_to_clear))
     }
 }
 
@@ -391,7 +395,7 @@ impl LanguageServer for Backend {
         Ok(InitializeResult {
             server_info: Some(ServerInfo {
                 name: "llm-ls".to_owned(),
-                version: Some("0.0.3".to_owned()),
+                version: Some("0.1.0".to_owned()),
             }),
             capabilities: ServerCapabilities {
                 text_document_sync: Some(TextDocumentSyncCapability::Kind(
