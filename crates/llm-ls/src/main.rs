@@ -20,6 +20,7 @@ const NAME: &str = "llm-ls";
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[derive(Debug, Deserialize, Serialize)]
+#[serde(untagged)]
 enum TokenizerConfig {
     Local { path: PathBuf },
     HuggingFace { repository: String },
