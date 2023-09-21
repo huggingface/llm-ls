@@ -1,7 +1,10 @@
 use axum::{extract::State, http::HeaderMap, routing::post, Json, Router};
 use serde::{Deserialize, Serialize};
 use std::{net::SocketAddr, sync::Arc};
-use tokio::sync::Mutex;
+use tokio::{
+    sync::Mutex,
+    time::{sleep, Duration},
+};
 
 #[derive(Clone)]
 struct AppState {
@@ -41,6 +44,16 @@ async fn log_headers(headers: HeaderMap, state: State<AppState>) -> Json<Generat
     })
 }
 
+async fn wait(state: State<AppState>) -> Json<GeneratedText> {
+    let mut lock = state.counter.lock().await;
+    *lock += 1;
+    sleep(Duration::from_millis(200)).await;
+    println!("waited for req {}", lock);
+    Json(GeneratedText {
+        generated_text: "dummy".to_owned(),
+    })
+}
+
 #[tokio::main]
 async fn main() {
     let app_state = AppState {
@@ -50,11 +63,12 @@ async fn main() {
         .route("/", post(default))
         .route("/tgi", post(tgi))
         .route("/headers", post(log_headers))
+        .route("/wait", post(wait))
         .with_state(app_state);
     let addr: SocketAddr = format!("{}:{}", "0.0.0.0", 4242)
         .parse()
         .expect("string to parse to socket addr");
-    println!("starting server {}:{}", addr.ip().to_string(), addr.port(),);
+    println!("starting server {}:{}", addr.ip(), addr.port(),);
 
     axum::Server::bind(&addr)
         .serve(app.into_make_service())
