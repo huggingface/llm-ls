@@ -1,6 +1,6 @@
-use reqwest::header::AUTHORIZATION;
+use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, USER_AGENT};
 use ropey::Rope;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::HashMap;
 use std::fmt::Display;
 use std::path::{Path, PathBuf};
@@ -15,6 +15,9 @@ use tower_lsp::{Client, LanguageServer, LspService, Server};
 use tracing::{debug, error, info};
 use tracing_appender::rolling;
 use tracing_subscriber::EnvFilter;
+
+const NAME: &str = "llm-ls";
+const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 struct RequestParams {
@@ -118,10 +121,45 @@ struct Completion {
 }
 
 #[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+enum IDE {
+    Neovim,
+    VSCode,
+    JetBrains,
+    Emacs,
+    Jupyter,
+    Sublime,
+    VisualStudio,
+    Unknown,
+}
+
+impl Default for IDE {
+    fn default() -> Self {
+        IDE::Unknown
+    }
+}
+
+impl Display for IDE {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.serialize(f)
+    }
+}
+
+fn parse_ide<'de, D>(d: D) -> std::result::Result<IDE, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Deserialize::deserialize(d).map(|b: Option<_>| b.unwrap_or(IDE::Unknown))
+}
+
+#[derive(Debug, Deserialize, Serialize)]
 struct CompletionParams {
     #[serde(flatten)]
     text_document_position: TextDocumentPositionParams,
     request_params: RequestParams,
+    #[serde(default)]
+    #[serde(deserialize_with = "parse_ide")]
+    ide: IDE,
     fim: FimParams,
     api_token: Option<String>,
     model: String,
@@ -234,21 +272,22 @@ fn build_prompt(
 
 async fn request_completion(
     http_client: &reqwest::Client,
+    ide: IDE,
     model: &str,
     request_params: RequestParams,
     api_token: Option<&String>,
     prompt: String,
 ) -> Result<Vec<Generation>> {
-    let mut req = http_client.post(build_url(model)).json(&APIRequest {
-        inputs: prompt,
-        parameters: request_params.into(),
-    });
-
-    if let Some(api_token) = api_token {
-        req = req.header(AUTHORIZATION, format!("Bearer {api_token}"))
-    }
-
-    let res = req.send().await.map_err(internal_error)?;
+    let res = http_client
+        .post(build_url(model))
+        .json(&APIRequest {
+            inputs: prompt,
+            parameters: request_params.into(),
+        })
+        .headers(build_headers(api_token, ide)?)
+        .send()
+        .await
+        .map_err(internal_error)?;
 
     match res.json().await.map_err(internal_error)? {
         APIResponse::Generation(gen) => Ok(vec![gen]),
@@ -377,6 +416,7 @@ impl Backend {
         };
         let result = request_completion(
             http_client,
+            params.ide,
             &params.model,
             params.request_params,
             params.api_token.as_ref(),
@@ -395,7 +435,7 @@ impl LanguageServer for Backend {
         Ok(InitializeResult {
             server_info: Some(ServerInfo {
                 name: "llm-ls".to_owned(),
-                version: Some("0.1.0".to_owned()),
+                version: Some(VERSION.to_owned()),
             }),
             capabilities: ServerCapabilities {
                 text_document_sync: Some(TextDocumentSyncCapability::Kind(
@@ -466,6 +506,24 @@ impl LanguageServer for Backend {
         let _ = debug!("shutdown");
         Ok(())
     }
+}
+
+fn build_headers(api_token: Option<&String>, ide: IDE) -> Result<HeaderMap> {
+    let mut headers = HeaderMap::new();
+    let user_agent = format!("{NAME}/{VERSION}; rust/unknown; ide/{ide:?}");
+    headers.insert(
+        USER_AGENT,
+        HeaderValue::from_str(&user_agent).map_err(internal_error)?,
+    );
+
+    if let Some(api_token) = api_token {
+        headers.insert(
+            AUTHORIZATION,
+            HeaderValue::from_str(&format!("Bearer {api_token}")).map_err(internal_error)?,
+        );
+    }
+
+    Ok(headers)
 }
 
 #[tokio::main]

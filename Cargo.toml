@@ -3,7 +3,6 @@ members = ["xtask/", "crates/*"]
 resolver = "2"
 
 [workspace.package]
-rust-version = "1.71"
 edition = "2021"
 license = "Apache-2.0"
 authors = ["Luc Georges <luc@huggingface.co>"]

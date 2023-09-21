@@ -1,0 +1,14 @@
+[package]
+name = "mock_server"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "mock_server"
+
+[dependencies]
+axum = "0.6"
+# use this is you need axum::debug_handler
+# axum = { version = "0.6", features = ["macros"] }
+serde = { version = "1", features = ["derive"] }
+tokio = { version = "1", features = ["full"] }
