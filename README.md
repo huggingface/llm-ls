@@ -8,6 +8,6 @@
 ## Compatible extensions
 
 - [x] [llm.nvim](https://github.com/huggingface/llm.nvim)
-- [ ] [huggingface-vscode](https://github.com/huggingface/huggingface-vscode)
+- [x] [llm-vscode](https://github.com/huggingface/llm-vscode)
 - [ ] [jupytercoder](https://github.com/bigcode-project/jupytercoder)
 
