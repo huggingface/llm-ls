@@ -9,5 +9,6 @@
 
 - [x] [llm.nvim](https://github.com/huggingface/llm.nvim)
 - [x] [llm-vscode](https://github.com/huggingface/llm-vscode)
+- [x] [llm-intellij](https://github.com/huggingface/llm-intellij)
 - [ ] [jupytercoder](https://github.com/bigcode-project/jupytercoder)
 
