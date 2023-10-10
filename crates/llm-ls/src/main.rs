@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::fmt::Display;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tokenizers::Tokenizer;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::RwLock;
@@ -16,6 +16,7 @@ use tracing::{debug, error, info};
 use tracing_appender::rolling;
 use tracing_subscriber::EnvFilter;
 
+const MAX_WARNING_REPEAT: Duration = Duration::from_secs(3_600);
 const NAME: &str = "llm-ls";
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -121,6 +122,7 @@ struct Backend {
     unsafe_http_client: reqwest::Client,
     workspace_folders: Arc<RwLock<Option<Vec<WorkspaceFolder>>>>,
     tokenizer_map: Arc<RwLock<HashMap<String, Arc<Tokenizer>>>>,
+    unauthenticated_warn_at: Arc<RwLock<Instant>>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -454,6 +456,16 @@ impl Backend {
         let document = document_map
             .get(params.text_document_position.text_document.uri.as_str())
             .ok_or_else(|| internal_error("failed to find document"))?;
+        if params.api_token.is_none() {
+            let now = Instant::now();
+            let unauthenticated_warn_at = self.unauthenticated_warn_at.read().await;
+            if now.duration_since(*unauthenticated_warn_at) > MAX_WARNING_REPEAT {
+                drop(unauthenticated_warn_at);
+                self.client.show_message(MessageType::WARNING, "You are currently unauthenticated and will get rate limited. To reduce rate limiting, login with your API Token and consider subscribing to PRO: https://huggingface.co/pricing#pro").await;
+                let mut unauthenticated_warn_at = self.unauthenticated_warn_at.write().await;
+                *unauthenticated_warn_at = Instant::now();
+            }
+        }
         let tokenizer = get_tokenizer(
             &params.model,
             &mut *self.tokenizer_map.write().await,
@@ -631,6 +643,11 @@ async fn main() {
         unsafe_http_client,
         workspace_folders: Arc::new(RwLock::new(None)),
         tokenizer_map: Arc::new(RwLock::new(HashMap::new())),
+        unauthenticated_warn_at: Arc::new(RwLock::new(
+            Instant::now()
+                .checked_sub(MAX_WARNING_REPEAT)
+                .expect("instant to be in bounds"),
+        )),
     })
     .custom_method("llm-ls/getCompletions", Backend::get_completions)
     .finish();
