@@ -1,7 +1,7 @@
 use std::fmt;
 
 #[derive(Clone, Copy)]
-pub enum LanguageId {
+pub(crate) enum LanguageId {
     Bash,
     C,
     Cpp,
@@ -59,7 +59,7 @@ impl fmt::Display for LanguageId {
     }
 }
 
-pub struct LanguageIdError {
+pub(crate) struct LanguageIdError {
     language_id: String,
 }
 
