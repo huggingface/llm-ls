@@ -165,16 +165,16 @@ fn get_parser(language_id: LanguageId) -> Result<Parser> {
     }
 }
 
-pub struct Document {
+pub(crate) struct Document {
     #[allow(dead_code)]
     language_id: LanguageId,
-    pub text: Rope,
+    pub(crate) text: Rope,
     parser: Parser,
-    pub tree: Option<Tree>,
+    pub(crate) tree: Option<Tree>,
 }
 
 impl Document {
-    pub async fn open(language_id: &str, text: &str) -> Result<Self> {
+    pub(crate) async fn open(language_id: &str, text: &str) -> Result<Self> {
         let language_id = language_id.into();
         let rope = Rope::from_str(text);
         let mut parser = get_parser(language_id)?;
@@ -187,7 +187,7 @@ impl Document {
         })
     }
 
-    pub async fn change(&mut self, text: &str) -> Result<()> {
+    pub(crate) async fn change(&mut self, text: &str) -> Result<()> {
         let rope = Rope::from_str(text);
         self.tree = self.parser.parse(text, None);
         self.text = rope;
