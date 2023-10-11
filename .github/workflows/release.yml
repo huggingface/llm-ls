@@ -75,7 +75,7 @@ jobs:
 
       - name: Install ARM target toolchain
         if: matrix.target == 'arm-unknown-linux-gnueabihf'
-        run: sudo apt-get install gcc-arm-linux-gnueabihf
+        run: sudo apt-get install gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf
 
       - name: Dist
         run: cargo xtask dist
