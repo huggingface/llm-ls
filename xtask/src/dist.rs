@@ -136,7 +136,10 @@ impl Target {
             (String::new(), None)
         };
         let server_path = out_path.join(format!("llm-ls{exe_suffix}"));
-        let artifact_name = format!("llm-ls-{name}{exe_suffix}");
+        let artifact_name = match env::var("LLM_LS_ARTIFACT") {
+            Ok(artifact) => format!("llm-ls-{artifact}{exe_suffix}"),
+            _ => format!("llm-ls-{name}{exe_suffix}")
+        };
         Self {
             name,
             server_path,

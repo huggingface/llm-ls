@@ -89,11 +89,12 @@ jobs:
           name: dist-${{ matrix.target }}
           path: ./dist
 
-  dist-x86_64-unknown-alpine-musl:
-    name: dist (x86_64-unknown-alpine-musl)
+  dist-x86_64-alpine-linux-musl:
+    name: dist (x86_64-alpine-linux-musl)
     runs-on: ubuntu-latest
     env:
       LLM_LS_TARGET: x86_64-unknown-linux-musl
+      LLM_LS_ARTIFACT: x86_64-alpine-linux-musl
       # For some reason `-crt-static` is not working for clang without lld
       RUSTFLAGS: "-C link-arg=-fuse-ld=lld -C target-feature=-crt-static"
     container:
@@ -116,13 +117,13 @@ jobs:
       - name: Upload artifacts
         uses: actions/upload-artifact@v1
         with:
-          name: dist-x86_64-unknown-alpine-musl
+          name: dist-x86_64-alpine-linux-musl
           path: ./dist
 
   publish:
     name: publish
     runs-on: ubuntu-latest
-    needs: ["dist", "dist-x86_64-unknown-alpine-musl"]
+    needs: ["dist", "dist-x86_64-alpine-linux-musl"]
     steps:
       - name: Checkout repository
         uses: actions/checkout@v3
@@ -154,10 +155,10 @@ jobs:
         with:
           name: dist-x86_64-unknown-linux-musl
           path: dist
-      # - uses: actions/download-artifact@v1
-      #   with:
-      #     name: dist-x86_64-unknown-alpine-musl
-      #     path: dist
+      - uses: actions/download-artifact@v1
+        with:
+          name: dist-x86_64-alpine-linux-musl
+          path: dist
       - uses: actions/download-artifact@v1
         with:
           name: dist-aarch64-unknown-linux-gnu
