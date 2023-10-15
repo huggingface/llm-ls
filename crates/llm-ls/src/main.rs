@@ -13,9 +13,10 @@ use tokio::sync::RwLock;
 use tower_lsp::jsonrpc::{Error, Result};
 use tower_lsp::lsp_types::*;
 use tower_lsp::{Client, LanguageServer, LspService, Server};
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info, info_span, warn, Instrument};
 use tracing_appender::rolling;
 use tracing_subscriber::EnvFilter;
+use uuid::Uuid;
 
 mod document;
 mod language_id;
@@ -24,11 +25,21 @@ const MAX_WARNING_REPEAT: Duration = Duration::from_secs(3_600);
 const NAME: &str = "llm-ls";
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
 enum CompletionType {
     Empty,
     SingleLine,
     MultiLine,
+}
+
+impl Display for CompletionType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CompletionType::Empty => write!(f, "empty"),
+            CompletionType::SingleLine => write!(f, "single_line"),
+            CompletionType::MultiLine => write!(f, "multi_line"),
+        }
+    }
 }
 
 fn should_complete(document: &Document, position: Position) -> CompletionType {
@@ -129,7 +140,7 @@ struct APIRequest {
     parameters: APIParams,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 struct Generation {
     generated_text: String,
 }
@@ -197,6 +208,19 @@ where
 }
 
 #[derive(Debug, Deserialize, Serialize)]
+struct AcceptedCompletion {
+    request_id: Uuid,
+    accepted_completion: u32,
+    shown_completions: Vec<u32>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct RejectedCompletion {
+    request_id: Uuid,
+    shown_completions: Vec<u32>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
 struct CompletionParams {
     #[serde(flatten)]
     text_document_position: TextDocumentPositionParams,
@@ -211,6 +235,12 @@ struct CompletionParams {
     tokenizer_config: Option<TokenizerConfig>,
     context_window: usize,
     tls_skip_verify_insecure: bool,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct CompletionResult {
+    request_id: Uuid,
+    completions: Vec<Completion>,
 }
 
 fn internal_error<E: Display>(err: E) -> Error {
@@ -292,7 +322,7 @@ fn build_prompt(
             fim.middle
         );
         let time = t.elapsed().as_millis();
-        info!(build_prompt_ms = time, "built prompt in {time} ms");
+        info!(prompt, build_prompt_ms = time, "built prompt in {time} ms");
         Ok(prompt)
     } else {
         let mut token_count = context_window;
@@ -321,7 +351,7 @@ fn build_prompt(
         }
         let prompt = before.into_iter().rev().collect::<Vec<_>>().join("");
         let time = t.elapsed().as_millis();
-        info!(build_prompt_ms = time, "built prompt in {time} ms");
+        info!(prompt, build_prompt_ms = time, "built prompt in {time} ms");
         Ok(prompt)
     }
 }
@@ -334,6 +364,7 @@ async fn request_completion(
     api_token: Option<&String>,
     prompt: String,
 ) -> Result<Vec<Generation>> {
+    let t = Instant::now();
     let res = http_client
         .post(build_url(model))
         .json(&APIRequest {
@@ -345,11 +376,19 @@ async fn request_completion(
         .await
         .map_err(internal_error)?;
 
-    match res.json().await.map_err(internal_error)? {
-        APIResponse::Generation(gen) => Ok(vec![gen]),
-        APIResponse::Generations(gens) => Ok(gens),
-        APIResponse::Error(err) => Err(internal_error(err)),
-    }
+    let generations = match res.json().await.map_err(internal_error)? {
+        APIResponse::Generation(gen) => vec![gen],
+        APIResponse::Generations(gens) => gens,
+        APIResponse::Error(err) => return Err(internal_error(err)),
+    };
+    let time = t.elapsed().as_millis();
+    info!(
+        model,
+        compute_generations_ms = time,
+        generations = serde_json::to_string(&generations).map_err(internal_error)?,
+        "{model} computed generations in {time} ms"
+    );
+    Ok(generations)
 }
 
 fn parse_generations(
@@ -505,68 +544,102 @@ fn build_url(model: &str) -> String {
 }
 
 impl Backend {
-    async fn get_completions(&self, params: CompletionParams) -> Result<Vec<Completion>> {
-        info!("get_completions {params:?}");
-        let document_map = self.document_map.read().await;
+    async fn get_completions(&self, params: CompletionParams) -> Result<CompletionResult> {
+        let request_id = Uuid::new_v4();
+        let span = info_span!("completion_request", %request_id);
+        async move {
+            let document_map = self.document_map.read().await;
 
-        let document = document_map
-            .get(params.text_document_position.text_document.uri.as_str())
-            .ok_or_else(|| internal_error("failed to find document"))?;
-        if params.api_token.is_none() {
-            let now = Instant::now();
-            let unauthenticated_warn_at = self.unauthenticated_warn_at.read().await;
-            if now.duration_since(*unauthenticated_warn_at) > MAX_WARNING_REPEAT {
-                drop(unauthenticated_warn_at);
-                self.client.show_message(MessageType::WARNING, "You are currently unauthenticated and will get rate limited. To reduce rate limiting, login with your API Token and consider subscribing to PRO: https://huggingface.co/pricing#pro").await;
-                let mut unauthenticated_warn_at = self.unauthenticated_warn_at.write().await;
-                *unauthenticated_warn_at = Instant::now();
+            let document = document_map
+                .get(params.text_document_position.text_document.uri.as_str())
+                .ok_or_else(|| internal_error("failed to find document"))?;
+            info!(
+                document_url = %params.text_document_position.text_document.uri,
+                cursor_line = ?params.text_document_position.position.line,
+                cursor_character = ?params.text_document_position.position.character,
+                language_id = %document.language_id,
+                model = params.model,
+                ide = %params.ide,
+                max_new_tokens = params.request_params.max_new_tokens,
+                temperature = params.request_params.temperature,
+                do_sample = params.request_params.do_sample,
+                top_p = params.request_params.top_p,
+                stop_tokens = ?params.request_params.stop_tokens,
+                "received completion request for {}",
+                params.text_document_position.text_document.uri
+            );
+            if params.api_token.is_none() {
+                let now = Instant::now();
+                let unauthenticated_warn_at = self.unauthenticated_warn_at.read().await;
+                if now.duration_since(*unauthenticated_warn_at) > MAX_WARNING_REPEAT {
+                    drop(unauthenticated_warn_at);
+                    self.client.show_message(MessageType::WARNING, "You are currently unauthenticated and will get rate limited. To reduce rate limiting, login with your API Token and consider subscribing to PRO: https://huggingface.co/pricing#pro").await;
+                    let mut unauthenticated_warn_at = self.unauthenticated_warn_at.write().await;
+                    *unauthenticated_warn_at = Instant::now();
+                }
             }
-        }
-        let completion_type = should_complete(document, params.text_document_position.position);
-        info!("completion type: {completion_type:?}");
-        if completion_type == CompletionType::Empty {
-            return Ok(vec![]);
-        }
+            let completion_type = should_complete(document, params.text_document_position.position);
+            info!(%completion_type, "completion type: {completion_type:?}");
+            if completion_type == CompletionType::Empty {
+                return Ok(CompletionResult { request_id, completions: vec![]});
+            }
 
-        let tokenizer = get_tokenizer(
-            &params.model,
-            &mut *self.tokenizer_map.write().await,
-            params.tokenizer_config,
-            &self.http_client,
-            &self.cache_dir,
-            params.api_token.as_ref(),
-            params.ide,
-        )
-        .await?;
-        let prompt = build_prompt(
-            params.text_document_position.position,
-            &document.text,
-            &params.fim,
-            tokenizer,
-            params.context_window,
-        )?;
+            let tokenizer = get_tokenizer(
+                &params.model,
+                &mut *self.tokenizer_map.write().await,
+                params.tokenizer_config,
+                &self.http_client,
+                &self.cache_dir,
+                params.api_token.as_ref(),
+                params.ide,
+            )
+            .await?;
+            let prompt = build_prompt(
+                params.text_document_position.position,
+                &document.text,
+                &params.fim,
+                tokenizer,
+                params.context_window,
+            )?;
 
-        let http_client = if params.tls_skip_verify_insecure {
-            info!("tls verification is disabled");
-            &self.unsafe_http_client
-        } else {
-            &self.http_client
-        };
-        let result = request_completion(
-            http_client,
-            params.ide,
-            &params.model,
-            params.request_params,
-            params.api_token.as_ref(),
-            prompt,
-        )
-        .await?;
+            let http_client = if params.tls_skip_verify_insecure {
+                info!("tls verification is disabled");
+                &self.unsafe_http_client
+            } else {
+                &self.http_client
+            };
+            let result = request_completion(
+                http_client,
+                params.ide,
+                &params.model,
+                params.request_params,
+                params.api_token.as_ref(),
+                prompt,
+            )
+            .await?;
 
-        Ok(parse_generations(
-            result,
-            &params.tokens_to_clear,
-            completion_type,
-        ))
+            let completions = parse_generations(result, &params.tokens_to_clear, completion_type);
+            Ok(CompletionResult { request_id, completions })
+        }.instrument(span).await
+    }
+
+    async fn accept_completion(&self, accepted: AcceptedCompletion) -> Result<()> {
+        info!(
+            request_id = %accepted.request_id,
+            accepted_position = accepted.accepted_completion,
+            shown_completions = serde_json::to_string(&accepted.shown_completions).map_err(internal_error)?,
+            "accepted completion"
+        );
+        Ok(())
+    }
+
+    async fn reject_completion(&self, rejected: RejectedCompletion) -> Result<()> {
+        info!(
+            request_id = %rejected.request_id,
+            shown_completions = serde_json::to_string(&rejected.shown_completions).map_err(internal_error)?,
+            "rejected completion"
+        );
+        Ok(())
     }
 }
 
@@ -724,6 +797,8 @@ async fn main() {
         )),
     })
     .custom_method("llm-ls/getCompletions", Backend::get_completions)
+    .custom_method("llm-ls/acceptCompletion", Backend::accept_completion)
+    .custom_method("llm-ls/rejectCompletion", Backend::reject_completion)
     .finish();
 
     Server::new(stdin, stdout, socket).serve(service).await;

@@ -166,8 +166,7 @@ fn get_parser(language_id: LanguageId) -> Result<Parser> {
 }
 
 pub(crate) struct Document {
-    #[allow(dead_code)]
-    language_id: LanguageId,
+    pub(crate) language_id: LanguageId,
     pub(crate) text: Rope,
     parser: Parser,
     pub(crate) tree: Option<Tree>,
