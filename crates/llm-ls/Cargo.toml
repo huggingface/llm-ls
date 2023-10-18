@@ -7,6 +7,8 @@ edition = "2021"
 name = "llm-ls"
 
 [dependencies]
+arrow-array = "47"
+arrow-schema = "47"
 home = "0.5"
 ropey = { version = "1.6", default-features = false, features = [
   "simd",
@@ -53,6 +55,7 @@ tree-sitter-rust = "0.20"
 tree-sitter-scala = "0.20"
 tree-sitter-swift = "0.3"
 tree-sitter-typescript = "0.20"
+vectordb = "0.3"
 
 [dependencies.uuid]
 version = "1.4"

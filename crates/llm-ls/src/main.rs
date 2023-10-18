@@ -22,6 +22,7 @@ use uuid::Uuid;
 mod adaptors;
 mod document;
 mod language_id;
+mod retrieval;
 
 const MAX_WARNING_REPEAT: Duration = Duration::from_secs(3_600);
 pub const NAME: &str = "llm-ls";
