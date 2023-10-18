@@ -659,12 +659,13 @@ checksum = "b4668fb0ea861c1df094127ac5f1da3409a82116a4ba74fca2e58ef927159bb3"
 
 [[package]]
 name = "llm-ls"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "home",
  "reqwest",
  "ropey",
  "serde",
+ "serde_json",
  "tokenizers",
  "tokio",
  "tower-lsp",
@@ -693,6 +694,7 @@ dependencies = [
  "tree-sitter-scala",
  "tree-sitter-swift",
  "tree-sitter-typescript",
+ "uuid",
 ]
 
 [[package]]
@@ -2036,6 +2038,17 @@ dependencies = [
  "form_urlencoded",
  "idna",
  "percent-encoding",
+ "serde",
+]
+
+[[package]]
+name = "uuid"
+version = "1.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "79daa5ed5740825c40b389c5e50312b9c86df53fccd33f281df655642b43869d"
+dependencies = [
+ "getrandom",
+ "rand",
  "serde",
 ]
 
