@@ -663,7 +663,7 @@ impl LanguageServer for Backend {
 
     async fn initialized(&self, _: InitializedParams) {
         self.client
-            .log_message(MessageType::INFO, "{llm-ls} initialized")
+            .log_message(MessageType::INFO, "llm-ls initialized")
             .await;
         info!("initialized language server");
     }
@@ -686,15 +686,15 @@ impl LanguageServer for Backend {
             Err(err) => error!("error opening {uri}: {err}"),
         }
         self.client
-            .log_message(MessageType::INFO, "{llm-ls} file opened")
+            .log_message(MessageType::INFO, format!("{uri} opened"))
             .await;
     }
 
     async fn did_change(&self, params: DidChangeTextDocumentParams) {
-        self.client
-            .log_message(MessageType::INFO, "{llm-ls} file changed")
-            .await;
         let uri = params.text_document.uri.to_string();
+        self.client
+            .log_message(MessageType::INFO, format!("{uri} changed"))
+            .await;
         let mut document_map = self.document_map.write().await;
         let doc = document_map.get_mut(&uri);
         if let Some(doc) = doc {
@@ -708,20 +708,20 @@ impl LanguageServer for Backend {
     }
 
     async fn did_save(&self, params: DidSaveTextDocumentParams) {
-        self.client
-            .log_message(MessageType::INFO, "{llm-ls} file saved")
-            .await;
         let uri = params.text_document.uri.to_string();
+        self.client
+            .log_message(MessageType::INFO, format!("{uri} saved"))
+            .await;
         info!("{uri} saved");
     }
 
     // TODO:
     // textDocument/didClose
     async fn did_close(&self, params: DidCloseTextDocumentParams) {
-        self.client
-            .log_message(MessageType::INFO, "{llm-ls} file closed")
-            .await;
         let uri = params.text_document.uri.to_string();
+        self.client
+            .log_message(MessageType::INFO, format!("{uri} closed"))
+            .await;
         info!("{uri} closed");
     }
 

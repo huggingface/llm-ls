@@ -1,0 +1,25 @@
+[package]
+name = "testbed"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+anyhow = "1"
+lsp-client = { path = "../lsp-client" }
+lsp-types = "0.94"
+serde = { version = "1", features = ["derive"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+url = "2"
+
+[dependencies.uuid]
+version = "1.4"
+features = [
+    "v4",
+    "fast-rng",
+    "serde",
+]
