@@ -84,7 +84,7 @@ fn should_complete(document: &Document, position: Position) -> CompletionType {
     }
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(untagged)]
 enum TokenizerConfig {
     Local { path: PathBuf },
@@ -235,6 +235,8 @@ struct CompletionParams {
     tokenizer_config: Option<TokenizerConfig>,
     context_window: usize,
     tls_skip_verify_insecure: bool,
+    request_body: Option<HashMap<String, serde_json::Value>>,
+    inputs_key: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -358,20 +360,33 @@ fn build_prompt(
 
 async fn request_completion(
     http_client: &reqwest::Client,
-    ide: Ide,
-    model: &str,
-    request_params: RequestParams,
-    api_token: Option<&String>,
     prompt: String,
+    params: CompletionParams,
 ) -> Result<Vec<Generation>> {
     let t = Instant::now();
+    let CompletionParams {
+        model,
+        request_body,
+        inputs_key,
+        request_params,
+        api_token,
+        ide,
+        ..
+    } = params;
+    let mut body: HashMap<String, serde_json::Value> = HashMap::new();
+    body.extend(request_body.unwrap_or_default());
+    body.insert(
+        inputs_key.unwrap_or("input".to_string()),
+        serde_json::Value::String(prompt),
+    );
+    body.insert(
+        "parameters".to_string(),
+        serde_json::to_value(request_params).expect("Failed to serialize request_params"),
+    );
     let res = http_client
-        .post(build_url(model))
-        .json(&APIRequest {
-            inputs: prompt,
-            parameters: request_params.into(),
-        })
-        .headers(build_headers(api_token, ide)?)
+        .post(build_url(&model))
+        .json(&body)
+        .headers(build_headers(api_token.as_ref(), ide)?)
         .send()
         .await
         .map_err(internal_error)?;
@@ -584,10 +599,11 @@ impl Backend {
                 return Ok(CompletionResult { request_id, completions: vec![]});
             }
 
+            let tokenizer_config = params.tokenizer_config.clone();
             let tokenizer = get_tokenizer(
                 &params.model,
                 &mut *self.tokenizer_map.write().await,
-                params.tokenizer_config,
+                tokenizer_config,
                 &self.http_client,
                 &self.cache_dir,
                 params.api_token.as_ref(),
@@ -608,17 +624,15 @@ impl Backend {
             } else {
                 &self.http_client
             };
+            let tokens_to_clear = params.tokens_to_clear.clone();
             let result = request_completion(
                 http_client,
-                params.ide,
-                &params.model,
-                params.request_params,
-                params.api_token.as_ref(),
                 prompt,
+                params,
             )
             .await?;
 
-            let completions = parse_generations(result, &params.tokens_to_clear, completion_type);
+            let completions = parse_generations(result, &tokens_to_clear, completion_type);
             Ok(CompletionResult { request_id, completions })
         }.instrument(span).await
     }
@@ -803,3 +817,4 @@ async fn main() {
 
     Server::new(stdin, stdout, socket).serve(service).await;
 }
+
