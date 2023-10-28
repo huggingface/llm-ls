@@ -1,6 +1,7 @@
 [workspace]
 members = ["xtask/", "crates/*"]
 resolver = "2"
+exclude = ["crates/testbed/repositories/*"]
 
 [workspace.package]
 edition = "2021"

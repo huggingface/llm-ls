@@ -1,0 +1,104 @@
+---
+context_window: 2000
+fim:
+  enabled: true
+  prefix: <fim_prefix>
+  middle: <fim_middle>
+  suffix: <fim_suffix>
+model: bigcode/starcoder
+request_params:
+  max_new_tokens: 500
+  temperature: 0.2
+  do_sample: true
+  top_p: 0.95
+tls_skip_verify_insecure: false
+tokenizer_config:
+  repository: bigcode/starcoder
+tokens_to_clear: ["<|endoftext|>"]
+repositories:
+  - source:
+      type: local
+      path: simple
+    build_command: cargo
+    build_args: ["build"]
+    language: rust
+    runner: simple_test_runner
+    holes:
+      - cursor:
+          line: 1
+          character: 4
+        file: src/main.rs
+      - cursor:
+          line: 4
+          character: 3
+        file: src/main.rs
+      - cursor:
+          line: 9
+          character: 7
+        file: src/main.rs
+      - cursor:
+          line: 25
+          character: 0
+        file: src/main.rs
+      - cursor:
+          line: 33
+          character: 22
+        file: src/main.rs
+  - source:
+      type: github
+      owner: huggingface
+      name: huggingface_hub
+      revision: a48eb89d4186bc84bca67b117cf29a0ee0b69774
+    build_command: /tmp/testbed-venv/bin/python3
+    build_args: ["-m", "compileall", "-q", "."]
+    language: python
+    runner: hf_hub_test_runner
+    runner_cmd: /tmp/testbed-venv/bin/python3
+    setup_commands:
+      - ["python3", ["-m", "venv", "/tmp/testbed-venv"]]
+      - ["/tmp/testbed-venv/bin/python3", ["-m", "pip", "install", ".[dev]"]]
+    holes:
+      - cursor:
+          line: 122
+          character: 23
+        file: src/huggingface_hub/utils/_cache_assets.py
+      - cursor:
+          line: 127
+          character: 10
+        file: src/huggingface_hub/utils/_cache_assets.py
+      - cursor:
+          line: 23
+          character: 28
+        file: src/huggingface_hub/utils/_deprecation.py
+      - cursor:
+          line: 33
+          character: 28
+        file: src/huggingface_hub/utils/_deprecation.py
+      - cursor:
+          line: 47
+          character: 8
+        file: src/huggingface_hub/utils/_http.py
+      - cursor:
+          line: 115
+          character: 4
+        file: src/huggingface_hub/utils/_http.py
+      - cursor:
+          line: 150
+          character: 4
+        file: src/huggingface_hub/utils/_http.py
+      - cursor:
+          line: 175
+          character: 4
+        file: src/huggingface_hub/utils/_http.py
+      - cursor:
+          line: 253
+          character: 0
+        file: src/huggingface_hub/utils/_http.py
+      - cursor:
+          line: 263
+          character: 25
+        file: src/huggingface_hub/utils/_http.py
+      - cursor:
+          line: 267
+          character: 8
+        file: src/huggingface_hub/utils/_http.py
