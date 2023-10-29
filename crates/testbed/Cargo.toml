@@ -10,17 +10,21 @@ authors.workspace = true
 [dependencies]
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
+futures = "0.3"
+futures-util = "0.3"
 home = "0.5"
 lsp-client = { path = "../lsp-client" }
 lsp-types = "0.94"
+reqwest = { version = "0.11", features = ["stream"] }
 ropey = "1.6"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_yaml = "0.9"
 tempfile = "3"
+tokio = "1"
+tokio-util = { version = "0.7", features = ["compat"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
-ureq = "2.8"
 url = "2"
 zip = "0.6"
 

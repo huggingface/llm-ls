@@ -53,7 +53,7 @@ repositories:
     build_args: ["-m", "compileall", "-q", "."]
     language: python
     runner: hf_hub_test_runner
-    runner_cmd: /tmp/testbed-venv/bin/python3
+    runner_command: /tmp/testbed-venv/bin/python3
     setup_commands:
       - ["python3", ["-m", "venv", "/tmp/testbed-venv"]]
       - ["/tmp/testbed-venv/bin/python3", ["-m", "pip", "install", ".[dev]"]]

@@ -1,9 +1,11 @@
 use std::{
     fmt::{self, Display},
-    io::{self, BufRead, Write},
+    io,
+    marker::Unpin,
 };
 
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tracing::debug;
 
 use crate::error::ExtractError;
@@ -166,21 +168,24 @@ pub struct Notification {
 }
 
 impl Message {
-    pub fn read(r: &mut impl BufRead) -> io::Result<Option<Message>> {
-        Message::_read(r)
+    pub async fn read<R: AsyncBufRead + Unpin + ?Sized>(r: &mut R) -> io::Result<Option<Message>> {
+        Message::_read(r).await
     }
-    fn _read(r: &mut dyn BufRead) -> io::Result<Option<Message>> {
-        let text = match read_msg_text(r)? {
+
+    async fn _read<R: AsyncBufRead + Unpin + ?Sized>(r: &mut R) -> io::Result<Option<Message>> {
+        let text = match read_msg_text(r).await? {
             None => return Ok(None),
             Some(text) => text,
         };
         let msg = serde_json::from_str(&text)?;
         Ok(Some(msg))
     }
-    pub fn write(self, w: &mut impl Write) -> io::Result<()> {
-        self._write(w)
+
+    pub async fn write<W: AsyncWrite + Unpin>(self, w: &mut W) -> io::Result<()> {
+        self._write(w).await
     }
-    fn _write(self, w: &mut dyn Write) -> io::Result<()> {
+
+    async fn _write<W: AsyncWrite + Unpin>(self, w: &mut W) -> io::Result<()> {
         #[derive(Serialize)]
         struct JsonRpc {
             jsonrpc: &'static str,
@@ -191,7 +196,7 @@ impl Message {
             jsonrpc: "2.0",
             msg: self,
         })?;
-        write_msg_text(w, &text)
+        write_msg_text(w, &text).await
     }
 }
 
@@ -254,14 +259,6 @@ impl Request {
             }),
         }
     }
-
-    pub(crate) fn is_shutdown(&self) -> bool {
-        self.method == "shutdown"
-    }
-
-    pub(crate) fn is_initialize(&self) -> bool {
-        self.method == "initialize"
-    }
 }
 
 impl Notification {
@@ -289,13 +286,11 @@ impl Notification {
     pub(crate) fn is_exit(&self) -> bool {
         self.method == "exit"
     }
-
-    pub(crate) fn is_initialized(&self) -> bool {
-        self.method == "initialized"
-    }
 }
 
-fn read_msg_text(inp: &mut dyn BufRead) -> io::Result<Option<String>> {
+async fn read_msg_text<R: AsyncBufRead + Unpin + ?Sized>(
+    inp: &mut R,
+) -> io::Result<Option<String>> {
     fn invalid_data(error: impl Into<Box<dyn std::error::Error + Send + Sync>>) -> io::Error {
         io::Error::new(io::ErrorKind::InvalidData, error)
     }
@@ -307,7 +302,7 @@ fn read_msg_text(inp: &mut dyn BufRead) -> io::Result<Option<String>> {
     let mut buf = String::new();
     loop {
         buf.clear();
-        if inp.read_line(&mut buf)? == 0 {
+        if inp.read_line(&mut buf).await? == 0 {
             return Ok(None);
         }
         if !buf.ends_with("\r\n") {
@@ -329,17 +324,18 @@ fn read_msg_text(inp: &mut dyn BufRead) -> io::Result<Option<String>> {
     let size: usize = size.ok_or_else(|| invalid_data!("no Content-Length"))?;
     let mut buf = buf.into_bytes();
     buf.resize(size, 0);
-    inp.read_exact(&mut buf)?;
+    inp.read_exact(&mut buf).await?;
     let buf = String::from_utf8(buf).map_err(invalid_data)?;
     debug!("< {}", buf);
     Ok(Some(buf))
 }
 
-fn write_msg_text(out: &mut dyn Write, msg: &str) -> io::Result<()> {
+async fn write_msg_text<W: AsyncWrite + Unpin>(out: &mut W, msg: &str) -> io::Result<()> {
     debug!("> {}", msg);
-    write!(out, "Content-Length: {}\r\n\r\n", msg.len())?;
-    out.write_all(msg.as_bytes())?;
-    out.flush()?;
+    out.write_all(format!("Content-Length: {}\r\n\r\n", msg.len()).as_bytes())
+        .await?;
+    out.write_all(msg.as_bytes()).await?;
+    out.flush().await?;
     Ok(())
 }
 

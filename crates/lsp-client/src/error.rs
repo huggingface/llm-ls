@@ -1,6 +1,8 @@
 use std::fmt;
 use std::io;
 
+use tokio::sync::oneshot::error::RecvError;
+
 use crate::msg::ResponseError;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -61,6 +63,7 @@ impl fmt::Display for ExtractError {
 
 #[derive(Debug)]
 pub enum Error {
+    ChannelClosed(RecvError),
     Io(io::Error),
     MissingBinaryPath,
 }
@@ -70,9 +73,16 @@ impl std::error::Error for Error {}
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Error::ChannelClosed(e) => write!(f, "Channel closed: {}", e),
             Error::Io(e) => write!(f, "IO error: {}", e),
             Error::MissingBinaryPath => write!(f, "Missing binary path"),
         }
+    }
+}
+
+impl From<RecvError> for Error {
+    fn from(value: RecvError) -> Self {
+        Self::ChannelClosed(value)
     }
 }
 

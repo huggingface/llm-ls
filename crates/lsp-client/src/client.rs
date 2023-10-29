@@ -1,37 +1,41 @@
-use std::sync::mpsc::{Receiver, SyncSender};
-use std::sync::{Arc, Mutex};
-use std::thread;
+use std::sync::Arc;
 
+use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
+use tokio::sync::{oneshot, Mutex};
+use tokio::task::JoinHandle;
 use tracing::{error, info};
 
+use crate::error::Result;
 use crate::msg::{Message, Notification, Request, Response};
 use crate::res_queue::ResQueue;
 use crate::server::Server;
 
 pub struct Connection {
-    pub(crate) sender: SyncSender<Message>,
-    pub(crate) receiver: Receiver<Message>,
+    pub(crate) sender: UnboundedSender<Message>,
+    pub(crate) receiver: UnboundedReceiver<Message>,
 }
 
 #[derive(Clone)]
 pub struct LspClient {
-    reader_thread: Arc<thread::JoinHandle<()>>,
+    reader_thread: Arc<JoinHandle<()>>,
     res_queue: Arc<Mutex<ResQueue<oneshot::Sender<Response>>>>,
     server: Arc<Server>,
-    server_sender: SyncSender<Message>,
+    server_sender: UnboundedSender<Message>,
 }
 
 impl LspClient {
-    pub fn new(conn: Connection, server: Server) -> Self {
+    pub async fn new(conn: Connection, server: Server) -> Self {
         let res_queue = Arc::new(Mutex::new(ResQueue::default()));
         let res_queue_clone = res_queue.clone();
-        let rx = conn.receiver;
-        let reader_thread = thread::spawn(move || {
-            for msg in rx.iter() {
+        let mut rx = conn.receiver;
+        let reader_thread = tokio::spawn(async move {
+            while let Some(msg) = rx.recv().await {
                 match msg {
                     Message::Request(req) => Self::on_request(req),
                     Message::Notification(not) => Self::on_notification(not),
-                    Message::Response(res) => Self::complete_request(res_queue_clone.clone(), res),
+                    Message::Response(res) => {
+                        Self::complete_request(res_queue_clone.clone(), res).await
+                    }
                 }
             }
         });
@@ -48,29 +52,32 @@ impl LspClient {
     }
 
     fn on_notification(not: Notification) {
-        info!("received notification: {not:?}, ignoring");
+        info!("received notification: {not:?}");
     }
 
-    pub fn send_request<R: lsp_types::request::Request>(&self, params: R::Params) -> Response {
+    pub async fn send_request<R: lsp_types::request::Request>(
+        &self,
+        params: R::Params,
+    ) -> Result<Response> {
         let (sender, receiver) = oneshot::channel::<Response>();
         let request =
             self.res_queue
                 .lock()
-                .unwrap()
+                .await
                 .outgoing
                 .register(R::METHOD.to_string(), params, sender);
 
         self.send(request.into());
-        receiver.recv().unwrap()
+        Ok(receiver.await?)
     }
 
-    fn complete_request(
+    async fn complete_request(
         res_queue: Arc<Mutex<ResQueue<oneshot::Sender<Response>>>>,
         response: Response,
     ) {
         let sender = res_queue
             .lock()
-            .unwrap()
+            .await
             .outgoing
             .complete(response.id.clone())
             .expect("received response for unknown request");
@@ -83,18 +90,20 @@ impl LspClient {
         self.send(not.into());
     }
 
-    pub fn shutdown(&self) {
-        self.send_request::<lsp_types::request::Shutdown>(());
+    pub async fn shutdown(&self) -> Result<()> {
+        self.send_request::<lsp_types::request::Shutdown>(())
+            .await?;
+        Ok(())
     }
 
     /// Exit will join on server threads waiting for exit.
     ///
     /// This will fail if there are other strong references to the [`Server`] instance
-    pub fn exit(self) {
+    pub async fn exit(self) {
         self.send_notification::<lsp_types::notification::Exit>(());
 
         match Arc::into_inner(self.reader_thread) {
-            Some(reader) => match reader.join() {
+            Some(reader) => match reader.await {
                 Ok(r) => r,
                 Err(err) => {
                     error!("client reader panicked!");
@@ -106,7 +115,7 @@ impl LspClient {
 
         match Arc::into_inner(self.server) {
             Some(server) => {
-                match server.join() {
+                match server.join().await {
                     Ok(_) => (),
                     Err(err) => error!("thread exited with error: {}", err),
                 };

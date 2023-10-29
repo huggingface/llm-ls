@@ -1,12 +1,8 @@
-use std::{
-    collections::HashMap,
-    io::Read,
-    path::Path,
-    process::{Command, Stdio},
-};
+use std::{path::Path, process::Stdio};
 
 use anyhow::anyhow;
 use serde::{Deserialize, Serialize};
+use tokio::{io::AsyncReadExt, process::Command};
 
 #[derive(Deserialize, Serialize)]
 struct TestSuiteResult {
@@ -20,9 +16,12 @@ struct TestSuiteResult {
     exec_time: f64,
 }
 
-fn hf_hub_test_runner(override_cmd: &Option<String>, repo_path: &Path) -> anyhow::Result<f32> {
+async fn hf_hub_test_runner(
+    override_cmd: &Option<String>,
+    repo_path: &Path,
+) -> anyhow::Result<f32> {
     let cmd = if let Some(cmd) = override_cmd {
-        &cmd
+        cmd
     } else {
         "python3"
     };
@@ -31,22 +30,23 @@ fn hf_hub_test_runner(override_cmd: &Option<String>, repo_path: &Path) -> anyhow
             "-m",
             "pytest",
             "tests",
+            "-q",
+            "--disable-warnings",
+            "--no-header",
             "-k",
             "_utils_ and not _utils_cache and not _utils_http and not paginate and not git",
         ])
         .current_dir(repo_path)
         .stdout(Stdio::piped())
+        .stderr(Stdio::null())
         .spawn()?;
     let mut stdout = String::new();
     child
         .stdout
         .take()
         .ok_or(anyhow!("failed to take stdout"))?
-        .read_to_string(&mut stdout)?;
-    let status = child.wait()?;
-    if !status.success() {
-        return Ok(0f32);
-    }
+        .read_to_string(&mut stdout)
+        .await?;
     // XXX: the pytest command can still fail even after the compilation check
     // the above check should prevent an error, but better safe than sorry
     let lines = stdout.split_terminator('\n');
@@ -69,9 +69,12 @@ fn hf_hub_test_runner(override_cmd: &Option<String>, repo_path: &Path) -> anyhow
     Ok(passed / (passed + failed))
 }
 
-fn simple_test_runner(override_cmd: &Option<String>, repo_path: &Path) -> anyhow::Result<f32> {
+async fn simple_test_runner(
+    override_cmd: &Option<String>,
+    repo_path: &Path,
+) -> anyhow::Result<f32> {
     let cmd = if let Some(cmd) = override_cmd {
-        &cmd
+        cmd
     } else {
         "cargo"
     };
@@ -80,6 +83,7 @@ fn simple_test_runner(override_cmd: &Option<String>, repo_path: &Path) -> anyhow
         .args(["--", "-Z", "unstable-options", "--format", "json"])
         .current_dir(repo_path)
         .stdout(Stdio::piped())
+        .stderr(Stdio::null())
         .spawn()?;
 
     let mut stdout = String::new();
@@ -87,7 +91,8 @@ fn simple_test_runner(override_cmd: &Option<String>, repo_path: &Path) -> anyhow
         .stdout
         .take()
         .ok_or(anyhow!("failed to take stdout"))?
-        .read_to_string(&mut stdout)?;
+        .read_to_string(&mut stdout)
+        .await?;
     let lines = stdout.split_terminator('\n');
     let test_suite_result = serde_json::from_str::<TestSuiteResult>(lines.last().unwrap())?;
 
@@ -95,17 +100,20 @@ fn simple_test_runner(override_cmd: &Option<String>, repo_path: &Path) -> anyhow
         / (test_suite_result.passed as f32 + test_suite_result.failed as f32))
 }
 
-type Runner = fn(&Option<String>, &Path) -> anyhow::Result<f32>;
+#[derive(Clone, Copy, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Runner {
+    SimpleTestRunner,
+    HfHubTestRunner,
+}
 
-pub fn get_runner_map() -> HashMap<String, Runner> {
-    let mut runner_map = HashMap::new();
-    runner_map.insert(
-        "simple_test_runner".to_owned(),
-        simple_test_runner as Runner,
-    );
-    runner_map.insert(
-        "hf_hub_test_runner".to_owned(),
-        hf_hub_test_runner as Runner,
-    );
-    runner_map
+pub async fn run_test(
+    runner: Runner,
+    override_cmd: &Option<String>,
+    repo_path: &Path,
+) -> anyhow::Result<f32> {
+    match runner {
+        Runner::SimpleTestRunner => simple_test_runner(override_cmd, repo_path).await,
+        Runner::HfHubTestRunner => hf_hub_test_runner(override_cmd, repo_path).await,
+    }
 }
