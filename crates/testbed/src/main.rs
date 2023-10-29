@@ -1,8 +1,7 @@
 use std::{
     collections::{HashMap, VecDeque},
     fmt::Display,
-    fs::OpenOptions,
-    io::{BufReader, BufWriter},
+    io::BufReader,
     path::{Path, PathBuf},
     process::Stdio,
     sync::Arc,
@@ -23,8 +22,8 @@ use runner::Runner;
 use serde::{Deserialize, Serialize};
 use tempfile::TempDir;
 use tokio::{
-    fs::{self, read_to_string, File},
-    io::{self, AsyncReadExt},
+    fs::{self, read_to_string, File, OpenOptions},
+    io::{self, AsyncReadExt, AsyncWriteExt},
     process::Command,
     sync::RwLock,
 };
@@ -149,7 +148,7 @@ async fn get_api_token(args_token: Option<String>) -> anyhow::Result<Option<Stri
     } else {
         let home_dir = home::home_dir().ok_or(anyhow!("failed to find home dir"))?;
         let cached_token = home_dir.join(".cache/huggingface/token");
-        if cached_token.exists() {
+        if cached_token.try_exists()? {
             let mut token = String::new();
             File::open(cached_token)
                 .await?
@@ -354,12 +353,12 @@ async fn complete_hole(
             .await?;
         let (_, result): (RequestId, GetCompletionsResult) = response.extract()?;
         file_content.insert(hole_start, &result.completions[0].generated_text);
-        file_content.write_to(BufWriter::new(
-            OpenOptions::new()
-                .write(true)
-                .truncate(true)
-                .open(&file_path)?,
-        ))?;
+        let mut file = OpenOptions::new()
+            .write(true)
+            .truncate(true)
+            .open(&file_path)
+            .await?;
+        file.write_all(file_content.to_string().as_bytes()).await?;
         let test_percentage = if build(&repo.build_command, &repo.build_args, &repo_path).await? {
             run_test(repo.runner, &repo.runner_command, &repo_path).await?
         } else {
