@@ -591,7 +591,7 @@ async fn main() -> anyhow::Result<()> {
     ));
     results_table.push_str(
         &[
-            "**Note:** The \"Average hole completion time\" represents the full process of:",
+            "**Note:** The \"hole completion time\" represents the full process of:",
             "  - downloading or copying the source code to the temp directory",
             "  - replacing the code from the file with a completion from the model",
             "  - building the project",
