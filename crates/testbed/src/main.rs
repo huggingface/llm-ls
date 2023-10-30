@@ -585,10 +585,20 @@ async fn main() -> anyhow::Result<()> {
     let total_avg = total_percentage / total_count;
     let total_time_avg = total_time as f32 / total_count;
     results_table.push_str(&format!(
-        "| **Total**       | --          | {} | {}% |\n",
+        "| **Total**       | --          | {} | {}% |\n\n",
         total_time_avg / 1_000f32,
         total_avg * 100f32
     ));
+    results_table.push_str(
+        &[
+            "**Note:** The \"Average hole completion time\" represents the full process of:",
+            "  - downloading or copying the source code to the temp directory",
+            "  - replacing the code from the file with a completion from the model",
+            "  - building the project",
+            "  - running the tests",
+        ]
+        .join("\n"),
+    );
     info!("llm-ls results:\n{}", results_table);
     OpenOptions::new()
         .create(true)
