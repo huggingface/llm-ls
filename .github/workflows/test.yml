@@ -17,6 +17,11 @@ jobs:
           rustup default nightly
           rustup update
 
+      - name: Install Python 3.10
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
       - name: Set up cargo cache
         uses: actions/cache@v3
         continue-on-error: false
@@ -29,6 +34,16 @@ jobs:
             target/
           key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-
+
+      - name: Set up repo dependencies cache
+        uses: actions/cache@v3
+        continue-on-error: false
+        with:
+          path: |
+            /tmp/huggingface_hub-venv/
+            /tmp/fastapi-venv/
+          key: ${{ runner.os }}-deps-${{ hashFiles('crates/testbed/repositories.yaml') }}
+          restore-keys: ${{ runner.os }}-deps-
 
       - name: Build project
         run: cargo build

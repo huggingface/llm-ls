@@ -49,14 +49,14 @@ repositories:
       owner: huggingface
       name: huggingface_hub
       revision: a48eb89d4186bc84bca67b117cf29a0ee0b69774
-    build_command: /tmp/testbed-venv/bin/python3
+    build_command: /tmp/huggingface_hub-venv/bin/python3
     build_args: ["-m", "compileall", "-q", "."]
     language: python
     runner: hf_hub_test_runner
-    runner_command: /tmp/testbed-venv/bin/python3
+    runner_command: /tmp/huggingface_hub-venv/bin/python3
     setup_commands:
-      - ["python3", ["-m", "venv", "/tmp/testbed-venv"]]
-      - ["/tmp/testbed-venv/bin/python3", ["-m", "pip", "install", ".[dev]"]]
+      - ["python3", ["-m", "venv", "/tmp/huggingface_hub-venv"]]
+      - ["/tmp/huggingface_hub-venv/bin/python3", ["-m", "pip", "install", ".[dev]"]]
     holes:
       - cursor:
           line: 122
@@ -102,3 +102,23 @@ repositories:
           line: 267
           character: 8
         file: src/huggingface_hub/utils/_http.py
+  - source:
+      type: github
+      owner: tiangolo
+      name: fastapi
+      revision: e4b21c6eab7cd58caf3c6c492ea1ce7945425dd1
+    build_command: /tmp/fastapi-venv/bin/python3
+    build_args: ["-m", "compileall", "-q", "."]
+    language: python
+    runner: fast_api_test_runner
+    runner_command: /tmp/fastapi-venv/bin/python3
+    setup_commands:
+      - ["python3", ["-m", "venv", "/tmp/fastapi-venv"]]
+      - ["/tmp/fastapi-venv/bin/python3", ["-m", "pip", "install", "--upgrade", "pip"]]
+      - ["/tmp/fastapi-venv/bin/python3", ["-m", "pip", "install", "-r", "requirements-tests.txt"]]
+      - ["/tmp/fastapi-venv/bin/python3", ["-m", "pip", "install", "pydantic"]]
+    holes:
+      - cursor:
+          line: 831
+          character: 0
+        file: fastapi/applications.py
