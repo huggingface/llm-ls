@@ -42,6 +42,7 @@ jobs:
           path: |
             /tmp/huggingface_hub-venv/
             /tmp/fastapi-venv/
+            /tmp/starlette-venv/
           key: ${{ runner.os }}-deps-${{ hashFiles('crates/testbed/repositories.yaml') }}
           restore-keys: ${{ runner.os }}-deps-${{ hashFiles('crates/testbed/repositories.yaml') }}
 

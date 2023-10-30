@@ -62,7 +62,7 @@ async fn pytest_runner(
         if res.contains("passed") {
             let passed_str = res.replace(" passed", "");
             passed = passed_str.parse::<u32>()? as f32;
-        } else if res.contains("failed") {
+        } else if res.contains("failed") && !res.contains("xfailed") {
             let failed_str = res.replace(" failed", "");
             failed = failed_str.parse::<u32>()? as f32;
         }

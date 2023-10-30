@@ -57,3 +57,18 @@ repositories:
       - ["/tmp/fastapi-venv/bin/python3", ["-m", "pip", "install", "-r", "requirements-tests.txt"]]
       - ["/tmp/fastapi-venv/bin/python3", ["-m", "pip", "install", "pydantic"]]
     holes_file: fastapi.json
+  - source:
+      type: github
+      owner: encode
+      name: starlette
+      revision: 657e7e7b728e13dc66cc3f77dffd00a42545e171
+    build_command: /tmp/starlette-venv/bin/python3
+    build_args: ["-m", "compileall", "-q", "."]
+    language: python
+    runner: pytest
+    runner_command: /tmp/starlette-venv/bin/python3
+    setup_commands:
+      - ["python3", ["-m", "venv", "/tmp/starlette-venv"]]
+      - ["/tmp/starlette-venv/bin/python3", ["-m", "pip", "install", "--upgrade", "pip"]]
+      - ["/tmp/starlette-venv/bin/python3", ["-m", "pip", "install", "-r", "requirements.txt"]]
+    holes_file: starlette.json
