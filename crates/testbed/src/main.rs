@@ -528,7 +528,7 @@ async fn main() -> anyhow::Result<()> {
     }
     let total_avg = total_percentage / total_count;
     results_table.push_str(&format!(
-        "| Total           | --          | {}% |\n",
+        "| **Total**       | --          | {}% |\n",
         total_avg * 100f32
     ));
     info!("llm-ls results:\n{}", results_table);
