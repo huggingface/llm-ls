@@ -33,7 +33,7 @@ jobs:
             ~/.cargo/git/db/
             target/
           key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-cargo-
+          restore-keys: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
 
       - name: Set up repo dependencies cache
         uses: actions/cache@v3
@@ -43,7 +43,7 @@ jobs:
             /tmp/huggingface_hub-venv/
             /tmp/fastapi-venv/
           key: ${{ runner.os }}-deps-${{ hashFiles('crates/testbed/repositories.yaml') }}
-          restore-keys: ${{ runner.os }}-deps-
+          restore-keys: ${{ runner.os }}-deps-${{ hashFiles('crates/testbed/repositories.yaml') }}
 
       - name: Build project
         run: cargo build
