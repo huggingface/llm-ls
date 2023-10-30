@@ -1,8 +1,8 @@
 name: test
 on:
   workflow_dispatch:
-
   push:
+    branches: [main]
   pull_request:
 
 jobs:
@@ -25,17 +25,21 @@ jobs:
         env:
           API_TOKEN: ${{ secrets.API_TOKEN }}
 
-      - name: Read results.md
-        if: github.event_name == 'pull_request'
-        run: |
-
-          echo 'RESULTS_MD<<EOF' >> $GITHUB_ENV
-          cat results.md >> $GITHUB_ENV
-          echo 'EOF' >> $GITHUB_ENV
-
-      - name: Comment Testbed result
-        uses: peter-evans/create-or-update-comment@v3
+      - name: Find Comment
+        uses: peter-evans/find-comment@v2
+        id: fc
         if: github.event_name == 'pull_request'
         with:
-          body: ${{ env.RESULTS_MD }}
+          issue-number: ${{ github.event.pull_request.number }}
+          comment-author: 'github-actions[bot]'
+          body-includes: '| Repository name | Source type | Pass percentage |'
+
+      - name: Create or update comment
+        if: github.event_name == 'pull_request'
+        uses: peter-evans/create-or-update-comment@v3
+        with:
+          comment-id: ${{ steps.fc.outputs.comment-id }}
+          issue-number: ${{ github.event.pull_request.number }}
+          body-path: results.md
+          edit-mode: replace
 
