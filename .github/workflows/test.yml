@@ -8,13 +8,15 @@ jobs:
   testbed:
     runs-on: ubuntu-latest
     steps:
+      - name: Debug
+        run: |
+          echo `pwd`
+          ls -lR
+
       - name: Install Rust toolchain
         run: |
           rustup default nightly
           rustup update
-
-      - name: Update apt repositories
-        run: sudo apt-get update -y
 
       - name: Build project
         run: cargo build
