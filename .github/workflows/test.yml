@@ -8,10 +8,8 @@ jobs:
   testbed:
     runs-on: ubuntu-latest
     steps:
-      - name: Debug
-        run: |
-          echo `pwd`
-          ls -lR
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
       - name: Install Rust toolchain
         run: |
