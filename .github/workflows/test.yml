@@ -20,7 +20,7 @@ jobs:
         run: cargo build
 
       - name: Run testbed
-        run: cargo run -- --api-token $API_TOKEN
+        run: cargo run --bin testbed -- --api-token $API_TOKEN
         env:
           API_TOKEN: ${{ secrets.API_TOKEN }}
 
