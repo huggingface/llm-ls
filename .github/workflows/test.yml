@@ -1,0 +1,40 @@
+name: test
+on:
+  workflow_dispatch:
+
+  push:
+
+jobs:
+  testbed:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install Rust toolchain
+        run: |
+          rustup default nightly
+          rustup update
+
+      - name: Update apt repositories
+        run: sudo apt-get update -y
+
+      - name: Build project
+        run: cargo build
+
+      - name: Run testbed
+        run: cargo run -- --api-token $API_TOKEN
+        env:
+          API_TOKEN: ${{ secrets.API_TOKEN }}
+
+      - name: Read results.md
+        if: github.event_name == 'pull_request'
+        run: |
+
+          echo 'RESULTS_MD<<EOF' >> $GITHUB_ENV
+          cat results.md >> $GITHUB_ENV
+          echo 'EOF' >> $GITHUB_ENV
+
+      - name: Comment Testbed result
+        uses: peter-evans/create-or-update-comment@v3
+        if: github.event_name == 'pull_request'
+        with:
+          body: ${{ env.RESULTS_MD }}
+

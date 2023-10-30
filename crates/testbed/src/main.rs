@@ -85,6 +85,15 @@ enum RepoSource {
     Github(GithubRepo),
 }
 
+impl RepoSource {
+    fn source_type(&self) -> String {
+        match self {
+            Self::Local { .. } => "local".to_owned(),
+            Self::Github { .. } => "github".to_owned(),
+        }
+    }
+}
+
 #[derive(Clone, Deserialize, Serialize)]
 struct Repository {
     build_command: String,
@@ -140,6 +149,22 @@ struct RepositoriesConfig {
     tls_skip_verify_insecure: bool,
     tokenizer_config: Option<TokenizerConfig>,
     tokens_to_clear: Vec<String>,
+}
+
+struct HoleCompletionResult {
+    repo_name: String,
+    repo_source_type: String,
+    pass_percentage: f32,
+}
+
+impl HoleCompletionResult {
+    fn new(repo_name: String, repo_source_type: String, pass_percentage: f32) -> Self {
+        Self {
+            repo_name,
+            repo_source_type,
+            pass_percentage,
+        }
+    }
 }
 
 async fn get_api_token(args_token: Option<String>) -> anyhow::Result<Option<String>> {
@@ -285,12 +310,9 @@ async fn complete_hole(
     tls_skip_verify_insecure: bool,
     tokens_to_clear: Vec<String>,
     tokenizer_config: Option<TokenizerConfig>,
-) -> anyhow::Result<f32> {
-    let span = info_span!(
-        "complete_hole",
-        repo_name = repo.name(),
-        hole = hole.to_string()
-    );
+) -> anyhow::Result<HoleCompletionResult> {
+    let repo_name = repo.name();
+    let span = info_span!("complete_hole", repo_name, hole = hole.to_string());
     async move {
         let hole_instant = Instant::now();
         let (_temp_dir, repo_path) = setup_repo_dir(&repos_path_base, &repo.source).await?;
@@ -369,7 +391,11 @@ async fn complete_hole(
             "checked completion in {} ms",
             hole_instant.elapsed().as_millis()
         );
-        Ok(test_percentage)
+        Ok(HoleCompletionResult::new(
+            repo_name,
+            repo.source.source_type(),
+            test_percentage,
+        ))
     }
     .instrument(span)
     .await
@@ -475,21 +501,50 @@ async fn main() -> anyhow::Result<()> {
 
     while let Some(res) = handles.next().await {
         match res {
-            Ok(Ok(percentage)) => passing_tests_percentage.push(percentage),
+            Ok(Ok(res)) => passing_tests_percentage.push(res),
             Ok(Err(err)) => return Err(err),
             Err(err) => return Err(err.into()),
         }
     }
-    info!(
-        "llm-ls average completion success percentage: {:.2}%",
-        passing_tests_percentage.iter().sum::<f32>() / passing_tests_percentage.len() as f32
-            * 100f32
-    );
+    let mut results_map: HashMap<(String, String), (f32, f32)> = HashMap::new();
+    for res in passing_tests_percentage {
+        results_map
+            .entry((res.repo_name, res.repo_source_type))
+            .and_modify(|p| {
+                (*p).0 += res.pass_percentage;
+                (*p).1 += 1f32
+            })
+            .or_insert((res.pass_percentage, 1f32));
+    }
+    let mut results_table =
+        "| Repository name | Source type | Pass percentage |\n| :-------------- | :---------- | --------------: |\n".to_owned();
+    let mut total_percentage = 0f32;
+    let mut total_count = 0f32;
+    for (k, v) in results_map.iter() {
+        let avg = v.0 / v.1;
+        results_table.push_str(&format!("| {} | {} | {}% |\n", k.0, k.1, avg * 100f32));
+        total_percentage += v.0;
+        total_count += v.1;
+    }
+    let total_avg = total_percentage / total_count;
+    results_table.push_str(&format!(
+        "| Total           | --          | {}% |\n",
+        total_avg * 100f32
+    ));
+    info!("llm-ls results:\n{}", results_table);
+    OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open("results.md")
+        .await?
+        .write(results_table.as_bytes())
+        .await?;
 
     client.shutdown().await?;
     match Arc::into_inner(client) {
         Some(client) => client.exit().await,
-        None => warn!("could not exit because client is referenced elsewhere"),
+        None => warn!("could not send exit notification because client is referenced elsewhere"),
     }
     Ok(())
 }
