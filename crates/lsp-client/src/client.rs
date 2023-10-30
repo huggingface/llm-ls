@@ -3,7 +3,7 @@ use std::sync::Arc;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tokio::sync::{oneshot, Mutex};
 use tokio::task::JoinHandle;
-use tracing::{error, info};
+use tracing::{debug, error};
 
 use crate::error::Result;
 use crate::msg::{Message, Notification, Request, Response};
@@ -52,7 +52,7 @@ impl LspClient {
     }
 
     fn on_notification(not: Notification) {
-        info!("received notification: {not:?}");
+        debug!("received notification: {not:?}");
     }
 
     pub async fn send_request<R: lsp_types::request::Request>(

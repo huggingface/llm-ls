@@ -22,28 +22,8 @@ repositories:
     build_command: cargo
     build_args: ["build"]
     language: rust
-    runner: simple_test_runner
-    holes:
-      - cursor:
-          line: 1
-          character: 4
-        file: src/main.rs
-      - cursor:
-          line: 4
-          character: 3
-        file: src/main.rs
-      - cursor:
-          line: 9
-          character: 7
-        file: src/main.rs
-      - cursor:
-          line: 25
-          character: 0
-        file: src/main.rs
-      - cursor:
-          line: 33
-          character: 22
-        file: src/main.rs
+    runner: cargo
+    holes_file: simple.json
   - source:
       type: github
       owner: huggingface
@@ -52,56 +32,15 @@ repositories:
     build_command: /tmp/huggingface_hub-venv/bin/python3
     build_args: ["-m", "compileall", "-q", "."]
     language: python
-    runner: hf_hub_test_runner
+    runner: pytest
     runner_command: /tmp/huggingface_hub-venv/bin/python3
+    runner_extra_args:
+      - "-k"
+      - "_utils_ and not _utils_cache and not _utils_http and not paginate and not git"
     setup_commands:
       - ["python3", ["-m", "venv", "/tmp/huggingface_hub-venv"]]
       - ["/tmp/huggingface_hub-venv/bin/python3", ["-m", "pip", "install", ".[dev]"]]
-    holes:
-      - cursor:
-          line: 122
-          character: 23
-        file: src/huggingface_hub/utils/_cache_assets.py
-      - cursor:
-          line: 127
-          character: 10
-        file: src/huggingface_hub/utils/_cache_assets.py
-      - cursor:
-          line: 23
-          character: 28
-        file: src/huggingface_hub/utils/_deprecation.py
-      - cursor:
-          line: 33
-          character: 28
-        file: src/huggingface_hub/utils/_deprecation.py
-      - cursor:
-          line: 47
-          character: 8
-        file: src/huggingface_hub/utils/_http.py
-      - cursor:
-          line: 115
-          character: 4
-        file: src/huggingface_hub/utils/_http.py
-      - cursor:
-          line: 150
-          character: 4
-        file: src/huggingface_hub/utils/_http.py
-      - cursor:
-          line: 175
-          character: 4
-        file: src/huggingface_hub/utils/_http.py
-      - cursor:
-          line: 253
-          character: 0
-        file: src/huggingface_hub/utils/_http.py
-      - cursor:
-          line: 263
-          character: 25
-        file: src/huggingface_hub/utils/_http.py
-      - cursor:
-          line: 267
-          character: 8
-        file: src/huggingface_hub/utils/_http.py
+    holes_file: huggingface_hub.json
   - source:
       type: github
       owner: tiangolo
@@ -110,15 +49,11 @@ repositories:
     build_command: /tmp/fastapi-venv/bin/python3
     build_args: ["-m", "compileall", "-q", "."]
     language: python
-    runner: fast_api_test_runner
+    runner: pytest
     runner_command: /tmp/fastapi-venv/bin/python3
     setup_commands:
       - ["python3", ["-m", "venv", "/tmp/fastapi-venv"]]
       - ["/tmp/fastapi-venv/bin/python3", ["-m", "pip", "install", "--upgrade", "pip"]]
       - ["/tmp/fastapi-venv/bin/python3", ["-m", "pip", "install", "-r", "requirements-tests.txt"]]
       - ["/tmp/fastapi-venv/bin/python3", ["-m", "pip", "install", "pydantic"]]
-    holes:
-      - cursor:
-          line: 831
-          character: 0
-        file: fastapi/applications.py
+    holes_file: fastapi.json

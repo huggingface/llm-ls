@@ -33,6 +33,7 @@ use tracing_subscriber::EnvFilter;
 use url::Url;
 
 use crate::{
+    holes_generator::generate_holes,
     runner::run_test,
     types::{
         FimParams, GetCompletions, GetCompletionsParams, GetCompletionsResult, Ide, RequestParams,
@@ -40,6 +41,7 @@ use crate::{
     },
 };
 
+mod holes_generator;
 mod lang;
 mod runner;
 mod types;
@@ -52,17 +54,25 @@ struct Args {
     #[arg(short, long)]
     api_token: Option<String>,
 
+    /// When this is specified, holes files will be generated based on the repositories.yaml file
+    #[arg(short, long, action)]
+    generate_holes: bool,
+
+    /// Path to the directory containing the holes files
+    #[arg(short('H'), long)]
+    holes_dir_path: Option<String>,
+
     /// Path to llm-ls' binary
     #[arg(short, long)]
     llm_ls_bin_path: Option<String>,
 
-    /// Path to the repositories.yaml file
-    #[arg(long)]
-    repos_file_path: Option<String>,
-
     /// Path to the local repositories/ directory
+    #[arg(short('R'), long)]
+    repos_dir_path: Option<String>,
+
+    /// Path to the repositories.yaml file
     #[arg(short, long)]
-    repos_path: Option<String>,
+    repos_file_path: Option<String>,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -98,10 +108,12 @@ impl RepoSource {
 struct Repository {
     build_command: String,
     build_args: Vec<String>,
-    holes: Vec<Hole>,
+    holes_file: String,
     language: Language,
     runner: Runner,
     runner_command: Option<String>,
+    #[serde(default)]
+    runner_extra_args: Vec<String>,
     setup_commands: Option<Vec<(String, Vec<String>)>>,
     source: RepoSource,
 }
@@ -155,14 +167,21 @@ struct HoleCompletionResult {
     repo_name: String,
     repo_source_type: String,
     pass_percentage: f32,
+    completion_time_ms: u128,
 }
 
 impl HoleCompletionResult {
-    fn new(repo_name: String, repo_source_type: String, pass_percentage: f32) -> Self {
+    fn new(
+        repo_name: String,
+        repo_source_type: String,
+        pass_percentage: f32,
+        completion_time_ms: u128,
+    ) -> Self {
         Self {
             repo_name,
             repo_source_type,
             pass_percentage,
+            completion_time_ms,
         }
     }
 }
@@ -296,7 +315,6 @@ async fn build(
 
 #[allow(clippy::too_many_arguments)]
 async fn complete_hole(
-    idx: usize,
     hole: Hole,
     repo: Repository,
     client: Arc<LspClient>,
@@ -312,7 +330,7 @@ async fn complete_hole(
     tokenizer_config: Option<TokenizerConfig>,
 ) -> anyhow::Result<HoleCompletionResult> {
     let repo_name = repo.name();
-    let span = info_span!("complete_hole", repo_name, hole = hole.to_string());
+    let span = info_span!("complete_hole", repo_name);
     async move {
         let hole_instant = Instant::now();
         let (_temp_dir, repo_path) = setup_repo_dir(&repos_path_base, &repo.source).await?;
@@ -382,19 +400,22 @@ async fn complete_hole(
             .await?;
         file.write_all(file_content.to_string().as_bytes()).await?;
         let test_percentage = if build(&repo.build_command, &repo.build_args, &repo_path).await? {
-            run_test(repo.runner, &repo.runner_command, &repo_path).await?
+            run_test(
+                repo.runner,
+                &repo.runner_command,
+                &mut repo.runner_extra_args.clone(),
+                &repo_path,
+            )
+            .await?
         } else {
             0f32
         };
-        info!("hole {idx} passed {}%", test_percentage * 100f32);
-        info!(
-            "checked completion in {} ms",
-            hole_instant.elapsed().as_millis()
-        );
+        debug!("{} passed {}%", hole.to_string(), test_percentage * 100f32);
         Ok(HoleCompletionResult::new(
             repo_name,
             repo.source.source_type(),
             test_percentage,
+            hole_instant.elapsed().as_millis(),
         ))
     }
     .instrument(span)
@@ -413,13 +434,44 @@ async fn main() -> anyhow::Result<()> {
 
     let args = Args::parse();
 
+    let api_token = get_api_token(args.api_token).await?;
     let current_dir = std::env::current_dir()?;
     let llm_ls_path = if let Some(bin_path) = args.llm_ls_bin_path {
         bin_path.into()
     } else {
         current_dir.join("target/debug/llm-ls")
     };
-    info!(
+
+    let repos_path_base = if let Some(path) = args.repos_dir_path {
+        path.into()
+    } else {
+        current_dir.join("crates/testbed/repositories")
+    };
+
+    let repos_file_path = if let Some(path) = args.repos_file_path {
+        path.into()
+    } else {
+        current_dir.join("crates/testbed/repositories.yaml")
+    };
+
+    let holes_dir_path = if let Some(path) = args.holes_dir_path {
+        path.into()
+    } else {
+        current_dir.join("crates/testbed/holes")
+    };
+
+    let mut repos_file = String::new();
+    File::open(&repos_file_path)
+        .await?
+        .read_to_string(&mut repos_file)
+        .await?;
+    let repos_config: RepositoriesConfig = serde_yaml::from_str(&repos_file)?;
+    if args.generate_holes {
+        generate_holes(repos_config).await?;
+        return Ok(());
+    }
+
+    debug!(
         "initializing language server at path: {}",
         llm_ls_path.to_str().unwrap()
     );
@@ -429,26 +481,9 @@ async fn main() -> anyhow::Result<()> {
         .send_request::<lsp_types::request::Initialize>(InitializeParams::default())
         .await?;
 
-    let api_token = get_api_token(args.api_token).await?;
     let file_cache = Arc::new(RwLock::new(HashMap::new()));
-    let repos_path_base = if let Some(path) = args.repos_path {
-        path.into()
-    } else {
-        current_dir.join("crates/testbed/repositories")
-    };
     let mut passing_tests_percentage = vec![];
 
-    let repos_file_path = if let Some(path) = args.repos_file_path {
-        path.into()
-    } else {
-        current_dir.join("crates/testbed/repositories.yaml")
-    };
-    let mut repos_file = String::new();
-    File::open(&repos_file_path)
-        .await?
-        .read_to_string(&mut repos_file)
-        .await?;
-    let repos_config: RepositoriesConfig = serde_yaml::from_str(&repos_file)?;
     let RepositoriesConfig {
         context_window,
         fim,
@@ -465,7 +500,19 @@ async fn main() -> anyhow::Result<()> {
         if let Some(commands) = &repo.setup_commands {
             run_setup(commands, &setup_temp_dir).await?;
         }
-        for (idx, hole) in repo.holes.iter().enumerate() {
+        let holes_file_path = holes_dir_path.join(&repo.holes_file);
+        let mut holes = String::new();
+        File::open(holes_file_path)
+            .await?
+            .read_to_string(&mut holes)
+            .await?;
+        let holes: Vec<Hole> = serde_json::from_str(&holes)?;
+        info!(
+            "running holes completion for {} ({} holes)",
+            repo.name(),
+            holes.len()
+        );
+        for hole in holes.iter() {
             let hole = hole.clone();
             let repo = repo.clone();
             let client = client.clone();
@@ -479,7 +526,6 @@ async fn main() -> anyhow::Result<()> {
             let tokenizer_config = tokenizer_config.clone();
             handles.push(tokio::spawn(async move {
                 complete_hole(
-                    idx,
                     hole,
                     repo,
                     client,
@@ -506,29 +552,41 @@ async fn main() -> anyhow::Result<()> {
             Err(err) => return Err(err.into()),
         }
     }
-    let mut results_map: HashMap<(String, String), (f32, f32)> = HashMap::new();
+    let mut results_map: HashMap<(String, String), (u128, f32, f32)> = HashMap::new();
     for res in passing_tests_percentage {
         results_map
             .entry((res.repo_name, res.repo_source_type))
             .and_modify(|p| {
-                (*p).0 += res.pass_percentage;
-                (*p).1 += 1f32
+                p.0 += res.completion_time_ms;
+                p.1 += res.pass_percentage;
+                p.2 += 1f32;
             })
-            .or_insert((res.pass_percentage, 1f32));
+            .or_insert((res.completion_time_ms, res.pass_percentage, 1f32));
     }
     let mut results_table =
-        "| Repository name | Source type | Pass percentage |\n| :-------------- | :---------- | --------------: |\n".to_owned();
+        "| Repository name | Source type | Average hole completion time (s) | Pass percentage |\n| :-------------- | :---------- | :------------------------------- | --------------: |\n".to_owned();
+    let mut total_time = 0;
     let mut total_percentage = 0f32;
     let mut total_count = 0f32;
     for (k, v) in results_map.iter() {
-        let avg = v.0 / v.1;
-        results_table.push_str(&format!("| {} | {} | {}% |\n", k.0, k.1, avg * 100f32));
-        total_percentage += v.0;
-        total_count += v.1;
+        let avg = v.1 / v.2;
+        let avg_time = v.0 as f32 / v.2;
+        results_table.push_str(&format!(
+            "| {} | {} | {} | {}% |\n",
+            k.0,
+            k.1,
+            avg_time / 1_000f32,
+            avg * 100f32
+        ));
+        total_percentage += v.1;
+        total_count += v.2;
+        total_time += v.0;
     }
     let total_avg = total_percentage / total_count;
+    let total_time_avg = total_time as f32 / total_count;
     results_table.push_str(&format!(
-        "| **Total**       | --          | {}% |\n",
+        "| **Total**       | --          | {} | {}% |\n",
+        total_time_avg / 1_000f32,
         total_avg * 100f32
     ));
     info!("llm-ls results:\n{}", results_table);
@@ -538,7 +596,7 @@ async fn main() -> anyhow::Result<()> {
         .truncate(true)
         .open("results.md")
         .await?
-        .write(results_table.as_bytes())
+        .write_all(results_table.as_bytes())
         .await?;
 
     client.shutdown().await?;
