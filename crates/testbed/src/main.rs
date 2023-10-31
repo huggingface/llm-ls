@@ -28,7 +28,7 @@ use tokio::{
     sync::{RwLock, Semaphore},
 };
 use tokio_util::compat::FuturesAsyncReadCompatExt;
-use tracing::{debug, info, info_span, warn, Instrument};
+use tracing::{debug, error, info, info_span, warn, Instrument};
 use tracing_subscriber::EnvFilter;
 use url::Url;
 
@@ -347,7 +347,7 @@ async fn complete_hole(
     tokens_to_clear: Vec<String>,
     tokenizer_config: Option<TokenizerConfig>,
     semaphore: Arc<Semaphore>,
-) -> anyhow::Result<HoleCompletionResult> {
+) -> anyhow::Result<Option<HoleCompletionResult>> {
     let permit = semaphore.acquire_owned().await?;
     let repo_name = repo.name();
     let span = info_span!("complete_hole", repo_name);
@@ -411,7 +411,14 @@ async fn complete_hole(
                 tokenizer_config,
             })
             .await?;
-        let (_, result): (RequestId, GetCompletionsResult) = response.extract()?;
+        let (_, result): (RequestId, GetCompletionsResult) = match response.extract() {
+            Ok(res) => res,
+            Err(err) => {
+                error!("llm-ls response error: {err}");
+                return Ok(None);
+            }
+        };
+
         file_content.insert(hole_start, &result.completions[0].generated_text);
         let mut file = OpenOptions::new()
             .write(true)
@@ -432,12 +439,12 @@ async fn complete_hole(
         };
         debug!("{} passed {}%", hole.to_string(), test_percentage * 100f32);
         drop(permit);
-        Ok(HoleCompletionResult::new(
+        Ok(Some(HoleCompletionResult::new(
             repo_name,
             repo.source.source_type(),
             test_percentage,
             hole_instant.elapsed().as_millis(),
-        ))
+        )))
     }
     .instrument(span)
     .await
@@ -572,7 +579,8 @@ async fn main() -> anyhow::Result<()> {
 
     while let Some(res) = handles.next().await {
         match res {
-            Ok(Ok(res)) => passing_tests_percentage.push(res),
+            Ok(Ok(Some(res))) => passing_tests_percentage.push(res),
+            Ok(Ok(None)) => continue,
             Ok(Err(err)) => return Err(err),
             Err(err) => return Err(err.into()),
         }
