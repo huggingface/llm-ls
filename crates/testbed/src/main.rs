@@ -25,7 +25,7 @@ use tokio::{
     fs::{self, read_to_string, File, OpenOptions},
     io::{self, AsyncReadExt, AsyncWriteExt},
     process::Command,
-    sync::RwLock,
+    sync::{RwLock, Semaphore},
 };
 use tokio_util::compat::FuturesAsyncReadCompatExt;
 use tracing::{debug, info, info_span, warn, Instrument};
@@ -78,6 +78,7 @@ struct Args {
 #[derive(Clone, Deserialize, Serialize)]
 struct LocalRepo {
     path: PathBuf,
+    src_path: String,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -85,6 +86,7 @@ struct GithubRepo {
     owner: String,
     name: String,
     revision: String,
+    src_path: String,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -100,6 +102,13 @@ impl RepoSource {
         match self {
             Self::Local { .. } => "local".to_owned(),
             Self::Github { .. } => "github".to_owned(),
+        }
+    }
+
+    fn src_path(&self) -> String {
+        match self {
+            Self::Local(local) => local.src_path.clone(),
+            Self::Github(github) => github.src_path.clone(),
         }
     }
 }
@@ -133,6 +142,15 @@ struct Hole {
     cursor: lsp_types::Position,
     /// relative path of a file in the repository
     file: String,
+}
+
+impl Hole {
+    fn new(line: u32, character: u32, file: String) -> Self {
+        Self {
+            cursor: lsp_types::Position::new(line, character),
+            file,
+        }
+    }
 }
 
 impl Display for Hole {
@@ -253,14 +271,14 @@ async fn copy_dir_contents(source: &Path, dest: &Path) -> anyhow::Result<()> {
 }
 
 async fn setup_repo_dir(
-    repos_path_base: &Path,
+    repos_dir_path: &Path,
     source: &RepoSource,
 ) -> anyhow::Result<(TempDir, PathBuf)> {
     match source {
         RepoSource::Local(local) => {
             debug!("setting up local repo: {}", local.path.to_str().unwrap());
             let temp_dir = TempDir::new()?;
-            copy_dir_contents(&repos_path_base.join(&local.path), temp_dir.path()).await?;
+            copy_dir_contents(&repos_dir_path.join(&local.path), temp_dir.path()).await?;
             let repo_path = temp_dir.path().to_path_buf();
             Ok((temp_dir, repo_path))
         }
@@ -328,7 +346,9 @@ async fn complete_hole(
     tls_skip_verify_insecure: bool,
     tokens_to_clear: Vec<String>,
     tokenizer_config: Option<TokenizerConfig>,
+    semaphore: Arc<Semaphore>,
 ) -> anyhow::Result<HoleCompletionResult> {
+    let permit = semaphore.acquire_owned().await?;
     let repo_name = repo.name();
     let span = info_span!("complete_hole", repo_name);
     async move {
@@ -411,6 +431,7 @@ async fn complete_hole(
             0f32
         };
         debug!("{} passed {}%", hole.to_string(), test_percentage * 100f32);
+        drop(permit);
         Ok(HoleCompletionResult::new(
             repo_name,
             repo.source.source_type(),
@@ -442,7 +463,7 @@ async fn main() -> anyhow::Result<()> {
         current_dir.join("target/debug/llm-ls")
     };
 
-    let repos_path_base = if let Some(path) = args.repos_dir_path {
+    let repos_dir_path = if let Some(path) = args.repos_dir_path {
         path.into()
     } else {
         current_dir.join("crates/testbed/repositories")
@@ -467,7 +488,7 @@ async fn main() -> anyhow::Result<()> {
         .await?;
     let repos_config: RepositoriesConfig = serde_yaml::from_str(&repos_file)?;
     if args.generate_holes {
-        generate_holes(repos_config).await?;
+        generate_holes(repos_config, &repos_dir_path, &holes_dir_path).await?;
         return Ok(());
     }
 
@@ -495,8 +516,10 @@ async fn main() -> anyhow::Result<()> {
         tokens_to_clear,
     } = repos_config;
     let mut handles = FuturesUnordered::new();
+    // Query the model by batches of 64
+    let semaphore = Arc::new(Semaphore::new(64));
     for repo in repositories {
-        let (_temp_dir, setup_temp_dir) = setup_repo_dir(&repos_path_base, &repo.source).await?;
+        let (_temp_dir, setup_temp_dir) = setup_repo_dir(&repos_dir_path, &repo.source).await?;
         if let Some(commands) = &repo.setup_commands {
             run_setup(commands, &setup_temp_dir).await?;
         }
@@ -517,13 +540,14 @@ async fn main() -> anyhow::Result<()> {
             let repo = repo.clone();
             let client = client.clone();
             let file_cache = file_cache.clone();
-            let repos_path_base = repos_path_base.clone();
+            let repos_path_base = repos_dir_path.clone();
             let api_token = api_token.clone();
             let fim = fim.clone();
             let model = model.clone();
             let request_params = request_params.clone();
             let tokens_to_clear = tokens_to_clear.clone();
             let tokenizer_config = tokenizer_config.clone();
+            let semaphore = semaphore.clone();
             handles.push(tokio::spawn(async move {
                 complete_hole(
                     hole,
@@ -539,6 +563,7 @@ async fn main() -> anyhow::Result<()> {
                     tls_skip_verify_insecure,
                     tokens_to_clear,
                     tokenizer_config,
+                    semaphore,
                 )
                 .await
             }));

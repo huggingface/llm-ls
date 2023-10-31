@@ -15,6 +15,7 @@ futures-util = "0.3"
 home = "0.5"
 lsp-client = { path = "../lsp-client" }
 lsp-types = "0.94"
+rand = "0.8"
 reqwest = { version = "0.11", features = ["stream"] }
 ropey = "1.6"
 serde = { version = "1", features = ["derive"] }
