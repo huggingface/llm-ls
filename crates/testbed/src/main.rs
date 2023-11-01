@@ -59,15 +59,19 @@ struct Args {
     generate_holes: bool,
 
     /// Path to the directory containing the holes files
-    #[arg(short('H'), long)]
+    #[arg(short = 'H', long)]
     holes_dir_path: Option<String>,
+
+    /// Number of holes to create per repository
+    #[arg(short = 'n', long, default_value_t = 100)]
+    holes_per_repo: usize,
 
     /// Path to llm-ls' binary
     #[arg(short, long)]
     llm_ls_bin_path: Option<String>,
 
     /// Path to the local repositories/ directory
-    #[arg(short('R'), long)]
+    #[arg(short = 'R', long)]
     repos_dir_path: Option<String>,
 
     /// Path to the repositories.yaml file
@@ -495,8 +499,13 @@ async fn main() -> anyhow::Result<()> {
         .await?;
     let repos_config: RepositoriesConfig = serde_yaml::from_str(&repos_file)?;
     if args.generate_holes {
-        generate_holes(repos_config, &repos_dir_path, &holes_dir_path).await?;
-        return Ok(());
+        return generate_holes(
+            repos_config,
+            &repos_dir_path,
+            &holes_dir_path,
+            args.holes_per_repo,
+        )
+        .await;
     }
 
     debug!(

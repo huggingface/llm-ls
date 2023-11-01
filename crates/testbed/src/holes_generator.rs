@@ -6,18 +6,29 @@ use tokio::{
     fs::{self, OpenOptions},
     io::{AsyncReadExt, AsyncWriteExt},
 };
+use tracing::info;
 
 use crate::{setup_repo_dir, Hole, RepositoriesConfig};
 
-const HOLES_PER_REPO: usize = 1_000;
+async fn file_is_empty(file_path: impl AsRef<Path>) -> anyhow::Result<bool> {
+    let mut content = String::new();
+    fs::File::open(&file_path)
+        .await?
+        .read_to_string(&mut content)
+        .await?;
+    Ok(content.trim().is_empty())
+}
 
 pub(crate) async fn generate_holes(
     repositories_config: RepositoriesConfig,
     repos_dir_path: &Path,
     holes_dir_path: &Path,
+    holes_per_repo: usize,
 ) -> anyhow::Result<()> {
     let mut rng = rand::thread_rng();
     for repo in repositories_config.repositories {
+        let repo_name = repo.name();
+        info!("creating {} holes for {}", holes_per_repo, repo_name);
         let (_tmp_dir, path) = setup_repo_dir(repos_dir_path, &repo.source).await?;
         let mut files = vec![];
 
@@ -36,6 +47,7 @@ pub(crate) async fn generate_holes(
                     && repo
                         .language
                         .is_code_file(src_path.file_name().unwrap().to_str().unwrap())
+                    && !file_is_empty(&src_path).await?
                 {
                     files.push(src_path);
                 }
@@ -44,21 +56,26 @@ pub(crate) async fn generate_holes(
 
         let file_count = files.len();
         let mut holes = vec![];
-        for file_path in files {
-            let mut holes_per_file = HOLES_PER_REPO / file_count;
+        let holes_per_file = holes_per_repo / file_count;
+        let files_with_extra_holes = holes_per_repo % file_count;
+        for (idx, file_path) in files.iter().enumerate() {
+            let mut holes_for_file = holes_per_file;
+            if idx < files_with_extra_holes {
+                holes_for_file += 1;
+            }
             let mut content = String::new();
             fs::File::open(&file_path)
                 .await?
                 .read_to_string(&mut content)
                 .await?;
             let rope = Rope::from_str(&content);
-            for _ in 0..holes_per_file {
+            let mut i = 0;
+            while i < holes_for_file {
                 let line_nb = rng.gen_range(0..rope.len_lines());
                 let line = rope.line(line_nb);
                 let line_string = line.to_string();
                 let trimmed = line_string.trim();
                 if trimmed.starts_with(repo.language.comment_token()) || trimmed.is_empty() {
-                    holes_per_file += 1;
                     continue;
                 }
                 let column_nb = rng.gen_range(0..15.min(line.len_chars()));
@@ -67,9 +84,11 @@ pub(crate) async fn generate_holes(
                     column_nb as u32,
                     file_path.strip_prefix(&path)?.to_str().unwrap().to_owned(),
                 ));
+                i += 1;
             }
         }
         let mut file = OpenOptions::new()
+            .create(true)
             .write(true)
             .truncate(true)
             .open(&holes_dir_path.join(repo.holes_file))

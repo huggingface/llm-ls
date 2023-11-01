@@ -7,7 +7,7 @@ fim:
   suffix: <fim_suffix>
 model: bigcode/starcoder
 request_params:
-  max_new_tokens: 500
+  max_new_tokens: 150
   temperature: 0.2
   do_sample: true
   top_p: 0.95

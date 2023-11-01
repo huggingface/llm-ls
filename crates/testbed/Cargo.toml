@@ -30,7 +30,7 @@ url = "2"
 zip = "0.6"
 
 [dependencies.uuid]
-version = "1.4"
+version = "1.5"
 features = [
     "v4",
     "fast-rng",
