@@ -173,7 +173,7 @@ impl Display for Hole {
 //     Multiline
 // }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 struct RepositoriesConfig {
     context_window: usize,
     fim: FimParams,
@@ -336,119 +336,155 @@ async fn build(
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn complete_hole(
-    hole: Hole,
+async fn complete_holes(
     repo: Repository,
     client: Arc<LspClient>,
     file_cache: Arc<RwLock<HashMap<PathBuf, Rope>>>,
-    repos_path_base: PathBuf,
+    holes_dir_path: PathBuf,
+    repos_dir_path: PathBuf,
+    repos_config: RepositoriesConfig,
     api_token: Option<String>,
-    context_window: usize,
-    fim: FimParams,
-    model: String,
-    request_params: RequestParams,
-    tls_skip_verify_insecure: bool,
-    tokens_to_clear: Vec<String>,
-    tokenizer_config: Option<TokenizerConfig>,
     semaphore: Arc<Semaphore>,
-) -> anyhow::Result<Option<HoleCompletionResult>> {
+) -> anyhow::Result<Vec<HoleCompletionResult>> {
     let permit = semaphore.acquire_owned().await?;
-    let repo_name = repo.name();
-    let span = info_span!("complete_hole", repo_name);
+    let span = info_span!("complete_hole", repo_name = repo.name());
     async move {
-        let hole_instant = Instant::now();
-        let (_temp_dir, repo_path) = setup_repo_dir(&repos_path_base, &repo.source).await?;
-        let file_path = repo_path.join(&hole.file);
-        let file_path_str = file_path
-            .to_str()
-            .ok_or(anyhow!("failed to convert file to str"))?;
-        let mut file_content = if file_cache.read().await.contains_key(&file_path) {
-            file_cache
-                .read()
-                .await
-                .get(&file_path)
-                .ok_or(anyhow!("failed to find {} in file cache", file_path_str))?
-                .to_owned()
-        } else {
-            let file_content = Rope::from_str(&read_to_string(&file_path).await?);
-            file_cache
-                .write()
-                .await
-                .insert(file_path.clone(), file_content.clone());
-            file_content
-        };
-        let hole_start =
-            file_content.line_to_char(hole.cursor.line as usize) + hole.cursor.character as usize;
-        let hole_end = hole_start
-            + file_content
-                .line(hole.cursor.line as usize)
-                .slice(hole.cursor.character as usize..)
-                .len_chars()
-            - 1;
-        file_content.remove(hole_start..hole_end);
-
-        let uri = Url::parse(&format!("file:/{file_path_str}"))?;
-        client.send_notification::<lsp_types::notification::DidOpenTextDocument>(
-            DidOpenTextDocumentParams {
-                text_document: TextDocumentItem {
-                    uri: uri.clone(),
-                    language_id: repo.language.to_string(),
-                    version: 0,
-                    text: file_content.to_string(),
-                },
-            },
-        );
-        let response = client
-            .send_request::<GetCompletions>(GetCompletionsParams {
-                api_token,
-                context_window,
-                fim,
-                ide: Ide::default(),
-                model,
-                request_params,
-                text_document_position: TextDocumentPositionParams {
-                    position: hole.cursor,
-                    text_document: TextDocumentIdentifier { uri },
-                },
-                tls_skip_verify_insecure,
-                tokens_to_clear,
-                tokenizer_config,
-            })
-            .await?;
-        let (_, result): (RequestId, GetCompletionsResult) = match response.extract() {
-            Ok(res) => res,
-            Err(err) => {
-                error!("llm-ls response error: {err}");
-                return Ok(None);
-            }
-        };
-
-        file_content.insert(hole_start, &result.completions[0].generated_text);
-        let mut file = OpenOptions::new()
-            .write(true)
-            .truncate(true)
-            .open(&file_path)
-            .await?;
-        file.write_all(file_content.to_string().as_bytes()).await?;
-        let test_percentage = if build(&repo.build_command, &repo.build_args, &repo_path).await? {
-            run_test(
-                repo.runner,
-                &repo.runner_command,
-                &mut repo.runner_extra_args.clone(),
-                &repo_path,
-            )
+        let holes_file_path = holes_dir_path.join(&repo.holes_file);
+        let mut holes = String::new();
+        File::open(holes_file_path)
             .await?
+            .read_to_string(&mut holes)
+            .await?;
+        let holes: Vec<Hole> = serde_json::from_str(&holes)?;
+        let ten_percent = if holes.len() >= 10 {
+            holes.len() / 10
         } else {
-            0f32
+            1
         };
-        debug!("{} passed {}%", hole.to_string(), test_percentage * 100f32);
+        info!("running {} hole completions", holes.len());
+        let RepositoriesConfig {
+            context_window,
+            fim,
+            model,
+            request_params,
+            tls_skip_verify_insecure,
+            tokenizer_config,
+            tokens_to_clear,
+            ..
+        } = repos_config;
+        let (_temp_dir, repo_path) = setup_repo_dir(&repos_dir_path, &repo.source).await?;
+        if let Some(commands) = &repo.setup_commands {
+            run_setup(commands, &repo_path).await?;
+        }
+        let mut hole_completions_result = Vec::with_capacity(holes.len());
+        for (idx, hole) in holes.iter().enumerate() {
+            let hole_instant = Instant::now();
+            let file_path = repo_path.join(&hole.file);
+            let file_path_str = file_path
+                .to_str()
+                .ok_or(anyhow!("failed to convert file to str"))?;
+            let mut file_content = if file_cache.read().await.contains_key(&file_path) {
+                file_cache
+                    .read()
+                    .await
+                    .get(&file_path)
+                    .ok_or(anyhow!("failed to find {} in file cache", file_path_str))?
+                    .to_owned()
+            } else {
+                let file_content = Rope::from_str(&read_to_string(&file_path).await?);
+                file_cache
+                    .write()
+                    .await
+                    .insert(file_path.clone(), file_content.clone());
+                file_content
+            };
+            let original_content = file_content.clone();
+            let hole_start = file_content.line_to_char(hole.cursor.line as usize)
+                + hole.cursor.character as usize;
+            let hole_end = hole_start
+                + file_content
+                    .line(hole.cursor.line as usize)
+                    .slice(hole.cursor.character as usize..)
+                    .len_chars()
+                - 1;
+            file_content.remove(hole_start..hole_end);
+
+            let uri = Url::parse(&format!("file:/{file_path_str}"))?;
+            client.send_notification::<lsp_types::notification::DidOpenTextDocument>(
+                DidOpenTextDocumentParams {
+                    text_document: TextDocumentItem {
+                        uri: uri.clone(),
+                        language_id: repo.language.to_string(),
+                        version: 0,
+                        text: file_content.to_string(),
+                    },
+                },
+            );
+            let response = client
+                .send_request::<GetCompletions>(GetCompletionsParams {
+                    api_token: api_token.clone(),
+                    context_window,
+                    fim: fim.clone(),
+                    ide: Ide::default(),
+                    model: model.clone(),
+                    request_params: request_params.clone(),
+                    text_document_position: TextDocumentPositionParams {
+                        position: hole.cursor,
+                        text_document: TextDocumentIdentifier { uri },
+                    },
+                    tls_skip_verify_insecure,
+                    tokens_to_clear: tokens_to_clear.clone(),
+                    tokenizer_config: tokenizer_config.clone(),
+                })
+                .await?;
+            let (_, result): (RequestId, GetCompletionsResult) = match response.extract() {
+                Ok(res) => res,
+                Err(err) => {
+                    error!("llm-ls response error: {err}");
+                    continue;
+                }
+            };
+
+            file_content.insert(hole_start, &result.completions[0].generated_text);
+            let mut file = OpenOptions::new()
+                .write(true)
+                .truncate(true)
+                .open(&file_path)
+                .await?;
+            file.write_all(file_content.to_string().as_bytes()).await?;
+            let test_percentage =
+                if build(&repo.build_command, &repo.build_args, &repo_path).await? {
+                    run_test(
+                        repo.runner,
+                        &repo.runner_command,
+                        &mut repo.runner_extra_args.clone(),
+                        &repo_path,
+                    )
+                    .await?
+                } else {
+                    0f32
+                };
+            debug!("{} passed {}%", hole.to_string(), test_percentage * 100f32);
+            hole_completions_result.push(HoleCompletionResult::new(
+                repo.name(),
+                repo.source.source_type(),
+                test_percentage,
+                hole_instant.elapsed().as_millis(),
+            ));
+            let mut file = OpenOptions::new()
+                .write(true)
+                .truncate(true)
+                .open(&file_path)
+                .await?;
+            file.write_all(original_content.to_string().as_bytes())
+                .await?;
+            if (idx + 1) % ten_percent == 0 {
+                info!("completed {}%", (idx + 1) / ten_percent * 10);
+            }
+        }
         drop(permit);
-        Ok(Some(HoleCompletionResult::new(
-            repo_name,
-            repo.source.source_type(),
-            test_percentage,
-            hole_instant.elapsed().as_millis(),
-        )))
+        info!("finished running hole completions");
+        Ok(hole_completions_result)
     }
     .instrument(span)
     .await
@@ -521,75 +557,36 @@ async fn main() -> anyhow::Result<()> {
     let file_cache = Arc::new(RwLock::new(HashMap::new()));
     let mut passing_tests_percentage = vec![];
 
-    let RepositoriesConfig {
-        context_window,
-        fim,
-        model,
-        request_params,
-        repositories,
-        tls_skip_verify_insecure,
-        tokenizer_config,
-        tokens_to_clear,
-    } = repos_config;
+    let repositories = repos_config.repositories.clone();
     let mut handles = FuturesUnordered::new();
     // Query the model by batches of 64
-    let semaphore = Arc::new(Semaphore::new(64));
+    let semaphore = Arc::new(Semaphore::new(8));
     for repo in repositories {
-        let (_temp_dir, setup_temp_dir) = setup_repo_dir(&repos_dir_path, &repo.source).await?;
-        if let Some(commands) = &repo.setup_commands {
-            run_setup(commands, &setup_temp_dir).await?;
-        }
-        let holes_file_path = holes_dir_path.join(&repo.holes_file);
-        let mut holes = String::new();
-        File::open(holes_file_path)
-            .await?
-            .read_to_string(&mut holes)
-            .await?;
-        let holes: Vec<Hole> = serde_json::from_str(&holes)?;
-        info!(
-            "running holes completion for {} ({} holes)",
-            repo.name(),
-            holes.len()
-        );
-        for hole in holes.iter() {
-            let hole = hole.clone();
-            let repo = repo.clone();
-            let client = client.clone();
-            let file_cache = file_cache.clone();
-            let repos_path_base = repos_dir_path.clone();
-            let api_token = api_token.clone();
-            let fim = fim.clone();
-            let model = model.clone();
-            let request_params = request_params.clone();
-            let tokens_to_clear = tokens_to_clear.clone();
-            let tokenizer_config = tokenizer_config.clone();
-            let semaphore = semaphore.clone();
-            handles.push(tokio::spawn(async move {
-                complete_hole(
-                    hole,
-                    repo,
-                    client,
-                    file_cache,
-                    repos_path_base,
-                    api_token,
-                    context_window,
-                    fim,
-                    model,
-                    request_params,
-                    tls_skip_verify_insecure,
-                    tokens_to_clear,
-                    tokenizer_config,
-                    semaphore,
-                )
-                .await
-            }));
-        }
+        let client = client.clone();
+        let file_cache = file_cache.clone();
+        let holes_dir_path = holes_dir_path.clone();
+        let repos_dir_path = repos_dir_path.clone();
+        let repos_config = repos_config.clone();
+        let api_token = api_token.clone();
+        let semaphore = semaphore.clone();
+        handles.push(tokio::spawn(async move {
+            complete_holes(
+                repo,
+                client,
+                file_cache,
+                holes_dir_path,
+                repos_dir_path,
+                repos_config,
+                api_token,
+                semaphore,
+            )
+            .await
+        }));
     }
 
     while let Some(res) = handles.next().await {
         match res {
-            Ok(Ok(Some(res))) => passing_tests_percentage.push(res),
-            Ok(Ok(None)) => continue,
+            Ok(Ok(res)) => passing_tests_percentage.extend(res),
             Ok(Err(err)) => return Err(err),
             Err(err) => return Err(err.into()),
         }
@@ -606,7 +603,7 @@ async fn main() -> anyhow::Result<()> {
             .or_insert((res.completion_time_ms, res.pass_percentage, 1f32));
     }
     let mut results_table =
-        "| Repository name | Source type | Average hole completion time (s) | Pass percentage |\n| :-------------- | :---------- | :------------------------------- | --------------: |\n".to_owned();
+        "| Repository name | Source type | Average hole completion time (s) | Pass percentage |\n| :-------------- | :---------- | -------------------------------: | --------------: |\n".to_owned();
     let mut total_time = 0;
     let mut total_percentage = 0f32;
     let mut total_count = 0f32;

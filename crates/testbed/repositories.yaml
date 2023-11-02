@@ -27,21 +27,50 @@ repositories:
     holes_file: simple.json
   - source:
       type: github
+      owner: lancedb
+      name: lancedb
+      revision: 682e95fa8388d5839c8a782063beb307c4fca4bc
+      src_path: rust/vectordb/src
+    build_command: cargo
+    build_args: ["build"]
+    language: rust
+    runner: cargo
+    # this is to avoid skewing the average hole completion time
+    setup_commands:
+      - ["cargo", ["build"]]
+    holes_file: lancedb.json
+  - source:
+      type: github
+      owner: mmaitre314
+      name: picklescan
+      revision: 40001cd1caa9e041b1bce1b80f3707056cd8be52
+      src_path: src/picklescan
+    build_command: picklescan-venv/bin/python3
+    build_args: ["-m", "compileall", "-q", "."]
+    language: python
+    runner: pytest
+    runner_command: picklescan-venv/bin/python3
+    setup_commands:
+      - ["python3", ["-m", "venv", "picklescan-venv"]]
+      - ["picklescan-venv/bin/python3", ["-m", "pip", "install", "."]]
+    holes_file: picklescan.json
+  - source:
+      type: github
       owner: huggingface
       name: huggingface_hub
       revision: a48eb89d4186bc84bca67b117cf29a0ee0b69774
       src_path: src/huggingface_hub
-    build_command: /tmp/huggingface_hub-venv/bin/python3
+    build_command: huggingface_hub-venv/bin/python3
     build_args: ["-m", "compileall", "-q", "."]
     language: python
     runner: pytest
-    runner_command: /tmp/huggingface_hub-venv/bin/python3
+    runner_command: huggingface_hub-venv/bin/python3
     runner_extra_args:
       - "-k"
       - "_utils_ and not _utils_cache and not _utils_http and not paginate and not git"
     setup_commands:
-      - ["python3", ["-m", "venv", "/tmp/huggingface_hub-venv"]]
-      - ["/tmp/huggingface_hub-venv/bin/python3", ["-m", "pip", "install", ".[dev]"]]
+      - ["python3", ["-m", "venv", "huggingface_hub-venv"]]
+      - ["huggingface_hub-venv/bin/python3", ["-m", "pip", "install", ".[dev]"]]
     holes_file: huggingface_hub.json
   - source:
       type: github
@@ -53,12 +82,12 @@ repositories:
     build_args: ["-m", "compileall", "-q", "."]
     language: python
     runner: pytest
-    runner_command: /tmp/fastapi-venv/bin/python3
+    runner_command: fastapi-venv/bin/python3
     setup_commands:
-      - ["python3", ["-m", "venv", "/tmp/fastapi-venv"]]
-      - ["/tmp/fastapi-venv/bin/python3", ["-m", "pip", "install", "--upgrade", "pip"]]
-      - ["/tmp/fastapi-venv/bin/python3", ["-m", "pip", "install", "-r", "requirements-tests.txt"]]
-      - ["/tmp/fastapi-venv/bin/python3", ["-m", "pip", "install", "pydantic"]]
+      - ["python3", ["-m", "venv", "fastapi-venv"]]
+      - ["fastapi-venv/bin/python3", ["-m", "pip", "install", "--upgrade", "pip"]]
+      - ["fastapi-venv/bin/python3", ["-m", "pip", "install", "-r", "requirements-tests.txt"]]
+      - ["fastapi-venv/bin/python3", ["-m", "pip", "install", "pydantic"]]
     holes_file: fastapi.json
   - source:
       type: github
@@ -66,13 +95,13 @@ repositories:
       name: starlette
       revision: 657e7e7b728e13dc66cc3f77dffd00a42545e171
       src_path: starlette
-    build_command: /tmp/starlette-venv/bin/python3
+    build_command: starlette-venv/bin/python3
     build_args: ["-m", "compileall", "-q", "."]
     language: python
     runner: pytest
-    runner_command: /tmp/starlette-venv/bin/python3
+    runner_command: starlette-venv/bin/python3
     setup_commands:
-      - ["python3", ["-m", "venv", "/tmp/starlette-venv"]]
-      - ["/tmp/starlette-venv/bin/python3", ["-m", "pip", "install", "--upgrade", "pip"]]
-      - ["/tmp/starlette-venv/bin/python3", ["-m", "pip", "install", "-r", "requirements.txt"]]
+      - ["python3", ["-m", "venv", "starlette-venv"]]
+      - ["starlette-venv/bin/python3", ["-m", "pip", "install", "--upgrade", "pip"]]
+      - ["starlette-venv/bin/python3", ["-m", "pip", "install", "-r", "requirements.txt"]]
     holes_file: starlette.json

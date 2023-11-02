@@ -65,6 +65,8 @@ async fn pytest_runner(
         } else if res.contains("failed") && !res.contains("xfailed") {
             let failed_str = res.replace(" failed", "");
             failed = failed_str.parse::<u32>()? as f32;
+        } else if res.contains("error") {
+            return Ok(0f32);
         }
     }
 
@@ -93,7 +95,11 @@ async fn cargo_runner(override_cmd: &Option<String>, repo_path: &Path) -> anyhow
         .read_to_string(&mut stdout)
         .await?;
     let lines = stdout.split_terminator('\n');
-    let test_suite_result = serde_json::from_str::<TestSuiteResult>(lines.last().unwrap())?;
+    let result = match lines.last() {
+        Some(line) => line,
+        None => return Ok(0f32),
+    };
+    let test_suite_result = serde_json::from_str::<TestSuiteResult>(result)?;
 
     Ok(test_suite_result.passed as f32
         / (test_suite_result.passed as f32 + test_suite_result.failed as f32))
