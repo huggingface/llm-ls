@@ -78,7 +78,7 @@ repositories:
       name: fastapi
       revision: e4b21c6eab7cd58caf3c6c492ea1ce7945425dd1
       src_path: fastapi
-    build_command: /tmp/fastapi-venv/bin/python3
+    build_command: fastapi-venv/bin/python3
     build_args: ["-m", "compileall", "-q", "."]
     language: python
     runner: pytest
