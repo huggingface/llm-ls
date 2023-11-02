@@ -27,20 +27,6 @@ repositories:
     holes_file: simple.json
   - source:
       type: github
-      owner: lancedb
-      name: lancedb
-      revision: 682e95fa8388d5839c8a782063beb307c4fca4bc
-      src_path: rust/vectordb/src
-    build_command: cargo
-    build_args: ["build"]
-    language: rust
-    runner: cargo
-    # this is to avoid skewing the average hole completion time
-    setup_commands:
-      - ["cargo", ["build"]]
-    holes_file: lancedb.json
-  - source:
-      type: github
       owner: mmaitre314
       name: picklescan
       revision: 40001cd1caa9e041b1bce1b80f3707056cd8be52
@@ -105,3 +91,59 @@ repositories:
       - ["starlette-venv/bin/python3", ["-m", "pip", "install", "--upgrade", "pip"]]
       - ["starlette-venv/bin/python3", ["-m", "pip", "install", "-r", "requirements.txt"]]
     holes_file: starlette.json
+  - source:
+      type: github
+      owner: lancedb
+      name: lancedb
+      revision: 682e95fa8388d5839c8a782063beb307c4fca4bc
+      src_path: rust/vectordb/src
+    build_command: cargo
+    build_args: ["build"]
+    language: rust
+    runner: cargo
+    # this is to avoid skewing the average hole completion time
+    setup_commands:
+      - ["cargo", ["test", "--package", "vectordb", "--no-run"]]
+    holes_file: lancedb.json
+  - source:
+      type: github
+      owner: tkaitchuck
+      name: constrandom
+      revision: e9f560ba14e09ff9db9caca3f2dfa3ff52cc96de
+      src_path: src
+    build_command: cargo
+    build_args: ["build"]
+    language: rust
+    runner: cargo
+    # this is to avoid skewing the average hole completion time
+    setup_commands:
+      - ["cargo", ["build"]]
+    holes_file: constrandom.json
+  - source:
+      type: github
+      owner: jaemk
+      name: cached
+      revision: b1015561fb121c3e5698183c39df202e5a83994a
+      src_path: src
+    build_command: cargo
+    build_args: ["build"]
+    language: rust
+    runner: cargo
+    # this is to avoid skewing the average hole completion time
+    setup_commands:
+      - ["cargo", ["build"]]
+    holes_file: cached.json
+  - source:
+      type: github
+      owner: smol-rs
+      name: async-executor
+      revision: b91875e73bd9aec582e099d8c792514381fc8d0f
+      src_path: src
+    build_command: cargo
+    build_args: ["build"]
+    language: rust
+    runner: cargo
+    # this is to avoid skewing the average hole completion time
+    setup_commands:
+      - ["cargo", ["build"]]
+    holes_file: async-executor.json

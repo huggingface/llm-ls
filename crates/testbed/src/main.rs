@@ -507,7 +507,7 @@ async fn main() -> anyhow::Result<()> {
     let llm_ls_path = if let Some(bin_path) = args.llm_ls_bin_path {
         bin_path.into()
     } else {
-        current_dir.join("target/debug/llm-ls")
+        current_dir.join("target/release/llm-ls")
     };
 
     let repos_dir_path = if let Some(path) = args.repos_dir_path {
