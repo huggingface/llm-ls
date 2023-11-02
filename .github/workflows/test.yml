@@ -59,7 +59,14 @@ jobs:
         run: cargo build
 
       - name: Run testbed
+        run: cargo run --bin testbed -- --api-token $API_TOKEN -r `pwd`/crates/testbed/repositories-ci.yaml
+        when: github.event_name == 'push' || github.event_name == 'pull_request'
+        env:
+          API_TOKEN: ${{ secrets.API_TOKEN }}
+
+      - name: Run testbed
         run: cargo run --bin testbed -- --api-token $API_TOKEN
+        when: github.event_name == 'workflow_dispatch'
         env:
           API_TOKEN: ${{ secrets.API_TOKEN }}
 

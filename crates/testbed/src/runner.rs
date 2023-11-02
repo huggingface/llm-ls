@@ -58,7 +58,8 @@ async fn pytest_runner(
     };
     let mut passed = 0f32;
     let mut failed = 0f32;
-    for res in result.split(", ") {
+    let without_time = &result[0..result.find("in").unwrap_or(result.len())].trim();
+    for res in without_time.split(", ") {
         if res.contains("passed") {
             let passed_str = res.replace(" passed", "");
             passed = passed_str.parse::<u32>()? as f32;
@@ -95,14 +96,21 @@ async fn cargo_runner(override_cmd: &Option<String>, repo_path: &Path) -> anyhow
         .read_to_string(&mut stdout)
         .await?;
     let lines = stdout.split_terminator('\n');
-    let result = match lines.last() {
-        Some(line) => line,
-        None => return Ok(0f32),
-    };
-    let test_suite_result = serde_json::from_str::<TestSuiteResult>(result)?;
+    let mut passed = 0;
+    let mut failed = 0;
+    for line in lines {
+        let test_suite_result = match serde_json::from_str::<TestSuiteResult>(line) {
+            Ok(res) => res,
+            Err(_) => continue,
+        };
+        passed += test_suite_result.passed;
+        failed += test_suite_result.failed;
+    }
+    if passed == 0 && failed == 0 {
+        return Ok(0f32);
+    }
 
-    Ok(test_suite_result.passed as f32
-        / (test_suite_result.passed as f32 + test_suite_result.failed as f32))
+    Ok(passed as f32 / (passed as f32 + failed as f32))
 }
 
 #[derive(Clone, Copy, Deserialize, Serialize)]

@@ -107,7 +107,10 @@ pub struct ResponseError {
 
 impl Display for ResponseError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "[{}] {}", self.code, self.message)
+        match ErrorCode::try_from_i32(self.code) {
+            Ok(code) => write!(f, "{:?} [{}]: {}", code, self.code, self.message),
+            Err(_) => write!(f, "Unknown error code [{}]: {}", self.code, self.message),
+        }
     }
 }
 
@@ -157,6 +160,27 @@ pub enum ErrorCode {
     ///
     /// @since 3.17.0
     RequestFailed = -32803,
+}
+
+impl ErrorCode {
+    fn try_from_i32(code: i32) -> Result<ErrorCode, ()> {
+        match code {
+            -32700 => Ok(ErrorCode::ParseError),
+            -32600 => Ok(ErrorCode::InvalidRequest),
+            -32601 => Ok(ErrorCode::MethodNotFound),
+            -32602 => Ok(ErrorCode::InvalidParams),
+            -32603 => Ok(ErrorCode::InternalError),
+            -32099 => Ok(ErrorCode::ServerErrorStart),
+            -32000 => Ok(ErrorCode::ServerErrorEnd),
+            -32002 => Ok(ErrorCode::ServerNotInitialized),
+            -32001 => Ok(ErrorCode::UnknownErrorCode),
+            -32800 => Ok(ErrorCode::RequestCanceled),
+            -32801 => Ok(ErrorCode::ContentModified),
+            -32802 => Ok(ErrorCode::ServerCancelled),
+            -32803 => Ok(ErrorCode::RequestFailed),
+            _ => Err(()),
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
