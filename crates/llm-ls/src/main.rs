@@ -110,7 +110,7 @@ struct FimParams {
 }
 
 #[derive(Debug, Serialize)]
-struct APIParams {
+struct HFAPIParams {
     max_new_tokens: u32,
     temperature: f32,
     do_sample: bool,
@@ -121,7 +121,7 @@ struct APIParams {
     return_full_text: bool,
 }
 
-impl From<RequestParams> for APIParams {
+impl From<RequestParams> for HFAPIParams {
     fn from(params: RequestParams) -> Self {
         Self {
             max_new_tokens: params.max_new_tokens,
@@ -135,9 +135,19 @@ impl From<RequestParams> for APIParams {
 }
 
 #[derive(Serialize)]
-struct APIRequest {
+struct HFAPIRequest {
     inputs: String,
-    parameters: APIParams,
+    parameters: HFAPIParams,
+}
+
+#[derive(Serialize)]
+struct OpenAPIRequest {
+    prompt: String,
+    model: String,
+    max_tokens: u32,
+    temperature: f32,
+    top_p: f32,
+    stop: Option<Vec<String>>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -146,11 +156,11 @@ struct Generation {
 }
 
 #[derive(Debug, Deserialize)]
-struct APIError {
+struct HFAPIError {
     error: String,
 }
 
-impl Display for APIError {
+impl Display for HFAPIError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.error)
     }
@@ -158,10 +168,10 @@ impl Display for APIError {
 
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
-enum APIResponse {
+enum HFAPIResponse {
     Generation(Generation),
     Generations(Vec<Generation>),
-    Error(APIError),
+    Error(HFAPIError),
 }
 
 struct Backend {
@@ -221,6 +231,13 @@ struct RejectedCompletion {
 }
 
 #[derive(Debug, Deserialize, Serialize)]
+enum ModelType {
+    HuggingFaceModel { model: String },
+    HuggingFaceApi { url: String },
+    OpenAiApi { url: String, model: String },
+}
+
+#[derive(Debug, Deserialize, Serialize)]
 struct CompletionParams {
     #[serde(flatten)]
     text_document_position: TextDocumentPositionParams,
@@ -230,7 +247,7 @@ struct CompletionParams {
     ide: Ide,
     fim: FimParams,
     api_token: Option<String>,
-    model: String,
+    model: ModelType,
     tokens_to_clear: Vec<String>,
     tokenizer_config: Option<TokenizerConfig>,
     context_window: usize,
@@ -252,6 +269,73 @@ fn internal_error<E: Display>(err: E) -> Error {
         data: None,
     }
 }
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum OpenAiAPIResponse {
+    Ok(OpenAiCreateCompletionResponse),
+    Err(OpenAiValidationError),
+}
+
+#[derive(Debug, Deserialize)]
+struct OpenAiCreateCompletionResponse {
+    choices: Vec<OpenAiCreateCompletionResponseChoice>,
+}
+
+#[derive(Debug, Deserialize)]
+struct OpenAiCreateCompletionResponseChoice {
+    text: String,
+}
+
+impl From<OpenAiCreateCompletionResponseChoice> for Generation {
+    fn from(value: OpenAiCreateCompletionResponseChoice) -> Self {
+        return Generation {
+            generated_text: value.text,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct OpenAiValidationError {
+    detail: Vec<OpenAiValidationErrorItem>
+}
+
+impl Display for OpenAiValidationError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        for (i, item) in self.detail.iter().enumerate() {
+            if i != 0 {
+                write!(f, "\n")?;
+            }
+            write!(f, "{}: {} ({})", item.loc, item.msg, item.r#type)?;
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct OpenAiValidationErrorItem {
+    loc: StringOrInt,
+    msg: String,
+    r#type: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum StringOrInt {
+    String(String),
+    Int(u32),
+}
+
+impl Display for StringOrInt {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            StringOrInt::String(s) => s.fmt(f),
+            StringOrInt::Int(i) => i.fmt(f),
+        }
+    }
+}
+
+
 
 fn build_prompt(
     pos: Position,
@@ -359,34 +443,26 @@ fn build_prompt(
 async fn request_completion(
     http_client: &reqwest::Client,
     ide: Ide,
-    model: &str,
+    model: &ModelType,
     request_params: RequestParams,
     api_token: Option<&String>,
     prompt: String,
 ) -> Result<Vec<Generation>> {
     let t = Instant::now();
-    let res = http_client
-        .post(build_url(model))
-        .json(&APIRequest {
-            inputs: prompt,
-            parameters: request_params.into(),
-        })
+    let res = model.parameters(http_client
+            .post(model.build_url()), prompt, request_params)
         .headers(build_headers(api_token, ide)?)
         .send()
         .await
         .map_err(internal_error)?;
 
-    let generations = match res.json().await.map_err(internal_error)? {
-        APIResponse::Generation(gen) => vec![gen],
-        APIResponse::Generations(gens) => gens,
-        APIResponse::Error(err) => return Err(internal_error(err)),
-    };
+    let generations = model.get_generations(res).await?;
     let time = t.elapsed().as_millis();
     info!(
-        model,
+        ?model,
         compute_generations_ms = time,
         generations = serde_json::to_string(&generations).map_err(internal_error)?,
-        "{model} computed generations in {time} ms"
+        "{model:?} computed generations in {time} ms"
     );
     Ok(generations)
 }
@@ -482,7 +558,7 @@ async fn download_tokenizer_file(
 }
 
 async fn get_tokenizer(
-    model: &str,
+    model: &ModelType,
     tokenizer_map: &mut HashMap<String, Arc<Tokenizer>>,
     tokenizer_config: Option<TokenizerConfig>,
     http_client: &reqwest::Client,
@@ -490,7 +566,7 @@ async fn get_tokenizer(
     api_token: Option<&String>,
     ide: Ide,
 ) -> Result<Option<Arc<Tokenizer>>> {
-    if let Some(tokenizer) = tokenizer_map.get(model) {
+    if let Some(tokenizer) = tokenizer_map.get(model.model_name()) {
         return Ok(Some(tokenizer.clone()));
     }
     if let Some(config) = tokenizer_config {
@@ -503,7 +579,7 @@ async fn get_tokenizer(
                 }
             },
             TokenizerConfig::HuggingFace { repository } => {
-                let path = cache_dir.as_ref().join(model).join("tokenizer.json");
+                let path = cache_dir.as_ref().join(model.model_name()).join("tokenizer.json");
                 let url =
                     format!("https://huggingface.co/{repository}/resolve/main/tokenizer.json");
                 download_tokenizer_file(http_client, &url, api_token, &path, ide).await?;
@@ -527,7 +603,7 @@ async fn get_tokenizer(
             }
         };
         if let Some(tokenizer) = tokenizer.clone() {
-            tokenizer_map.insert(model.to_owned(), tokenizer.clone());
+            tokenizer_map.insert(model.model_name().to_owned(), tokenizer.clone());
         }
         Ok(tokenizer)
     } else {
@@ -535,11 +611,54 @@ async fn get_tokenizer(
     }
 }
 
-fn build_url(model: &str) -> String {
-    if model.starts_with("http://") || model.starts_with("https://") {
-        model.to_owned()
-    } else {
-        format!("https://api-inference.huggingface.co/models/{model}")
+impl ModelType {
+    fn build_url(&self) -> String {
+        match self {
+            ModelType::OpenAiApi { url, .. } => { format!("{}/v1/completions", url) }
+            ModelType::HuggingFaceApi { url } => url.to_owned(),
+            ModelType::HuggingFaceModel { model } => format!("https://api-inference.huggingface.co/models/{model}"),
+        }
+    }
+
+    fn model_name(&self) -> &str {
+        match self {
+            ModelType::OpenAiApi { model, .. } => model.split('/').last().unwrap(),
+            ModelType::HuggingFaceApi { url } => url.split('/').last().unwrap(),
+            ModelType::HuggingFaceModel { model } => model,
+        }
+    }
+
+    fn parameters(&self, builder: reqwest::RequestBuilder, prompt: String, request_params: RequestParams) -> reqwest::RequestBuilder {
+        match self {
+            ModelType::HuggingFaceModel { .. } | ModelType::HuggingFaceApi { .. } => builder
+                .json(&HFAPIRequest {
+                    inputs: prompt,
+                    parameters: request_params.into(),
+                }),
+            ModelType::OpenAiApi { model, .. } => builder
+                .json(&OpenAPIRequest {
+                    prompt,
+                    model: model.clone(),
+                    max_tokens: request_params.max_new_tokens,
+                    temperature: request_params.temperature,
+                    top_p: request_params.top_p,
+                    stop: request_params.stop_tokens.clone(),
+                })
+        }
+    }
+
+    async fn get_generations(&self, res: reqwest::Response) -> Result<Vec<Generation>> {
+        match self {
+            ModelType::HuggingFaceModel { .. } | ModelType::HuggingFaceApi { .. } => match res.json().await.map_err(internal_error)? {
+                HFAPIResponse::Generation(gen) => Ok(vec![gen]),
+                HFAPIResponse::Generations(gens) => Ok(gens),
+                HFAPIResponse::Error(err) => Err(internal_error(err)),
+            },
+            ModelType::OpenAiApi { .. } => match res.json().await.map_err(internal_error)? {
+                OpenAiAPIResponse::Ok(completion) => Ok(completion.choices.into_iter().map(|x| x.into()).collect()),
+                OpenAiAPIResponse::Err(err) => Err(internal_error(err)),
+            }
+        }
     }
 }
 
@@ -558,7 +677,7 @@ impl Backend {
                 cursor_line = ?params.text_document_position.position.line,
                 cursor_character = ?params.text_document_position.position.character,
                 language_id = %document.language_id,
-                model = params.model,
+                model = ?params.model,
                 ide = %params.ide,
                 max_new_tokens = params.request_params.max_new_tokens,
                 temperature = params.request_params.temperature,
