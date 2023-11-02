@@ -44,17 +44,6 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
 
-      - name: Set up repo dependencies cache
-        uses: actions/cache@v3
-        continue-on-error: false
-        with:
-          path: |
-            /tmp/huggingface_hub-venv/
-            /tmp/fastapi-venv/
-            /tmp/starlette-venv/
-          key: ${{ runner.os }}-deps-${{ hashFiles('crates/testbed/repositories.yaml') }}
-          restore-keys: ${{ runner.os }}-deps-${{ hashFiles('crates/testbed/repositories.yaml') }}
-
       - name: Build project
         run: cargo build
 
