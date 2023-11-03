@@ -18,6 +18,8 @@ jobs:
 
       - name: Install Rust toolchain
         run: |
+          sudo apt update
+          sudo apt-get install -y rustc
           rustup default nightly
           rustup update
 
@@ -28,7 +30,6 @@ jobs:
 
       - name: Install LanceDB dependencies
         run: |
-          sudo apt update
           sudo apt install -y protobuf-compiler libssl-dev
 
       - name: Set up cargo cache
