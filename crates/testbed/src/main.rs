@@ -321,8 +321,8 @@ async fn run_setup(
         let status = Command::new(&command.0)
             .args(&command.1)
             .current_dir(&repo_path)
-            // .stdout(Stdio::null())
-            // .stderr(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
             .spawn()?
             .wait()
             .await?;
