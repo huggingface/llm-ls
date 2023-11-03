@@ -19,7 +19,7 @@ jobs:
       - name: Install Rust toolchain
         run: |
           sudo apt update
-          sudo apt-get install -y rustc
+          sudo apt-get install -y rustup
           rustup default nightly
           rustup update
 
