@@ -88,7 +88,8 @@ struct Args {
 struct LocalRepo {
     path: PathBuf,
     src_path: String,
-    exclude_path: Option<String>,
+    #[serde(default)]
+    exclude_paths: Vec<String>,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -96,8 +97,10 @@ struct GithubRepo {
     owner: String,
     name: String,
     revision: String,
+    #[serde(default)]
     src_path: String,
-    exclude_path: Option<String>,
+    #[serde(default)]
+    exclude_paths: Vec<String>,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -123,10 +126,10 @@ impl RepoSource {
         }
     }
 
-    fn exclude_path(&self) -> Option<String> {
+    fn exclude_paths(&self) -> Vec<String> {
         match self {
-            Self::Local(local) => local.exclude_path.clone(),
-            Self::Github(github) => github.exclude_path.clone(),
+            Self::Local(local) => local.exclude_paths.clone(),
+            Self::Github(github) => github.exclude_paths.clone(),
         }
     }
 }

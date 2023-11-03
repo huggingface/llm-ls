@@ -1,4 +1,7 @@
-use std::{collections::VecDeque, path::Path};
+use std::{
+    collections::VecDeque,
+    path::{Path, PathBuf},
+};
 
 use rand::Rng;
 use ropey::Rope;
@@ -38,7 +41,12 @@ pub(crate) async fn generate_holes(
         let mut files = vec![];
 
         let mut stack = VecDeque::new();
-        let exclude_path = repo.source.exclude_path().map(|p| path.join(p));
+        let exclude_paths = repo
+            .source
+            .exclude_paths()
+            .iter()
+            .map(|p| path.join(p))
+            .collect::<Vec<PathBuf>>();
         stack.push_back(path.join(repo.source.src_path()));
         while let Some(src) = stack.pop_back() {
             let mut entries = fs::read_dir(&src).await?;
@@ -46,10 +54,8 @@ pub(crate) async fn generate_holes(
                 let entry_type = entry.file_type().await?;
 
                 let src_path = entry.path();
-                if let Some(path) = &exclude_path {
-                    if src_path.starts_with(path) {
-                        continue;
-                    }
+                if exclude_paths.iter().any(|p| src_path.starts_with(p)) {
+                    continue;
                 }
 
                 if entry_type.is_dir() {
@@ -68,6 +74,11 @@ pub(crate) async fn generate_holes(
         let file_count = files.len();
         let mut holes = vec![];
         let holes_per_file = holes_per_repo / file_count;
+        let holes_per_file = if holes_per_file == 0 {
+            1
+        } else {
+            holes_per_file
+        };
         let files_with_extra_holes = holes_per_repo % file_count;
         for (idx, file_path) in files.iter().enumerate() {
             let mut holes_for_file = holes_per_file;

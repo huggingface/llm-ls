@@ -158,19 +158,68 @@ repositories:
     setup_commands:
       - ["npm", ["install"]]
     holes_file: io-ts-smol.json
-  # - source:
-  #     type: github
-  #     owner: colinhacks
-  #     name: zod
-  #     revision: 481c9ba1932203777f6fe9497bb2a8a1d33c620e
-  #     src_path: src
-  #     exclude_path: src/__tests__
-  #   build_command: yarn
-  #   build_args: ["build"]
-  #   language: typescript
-  #   runner: npm
-  #   runner_command: yarn
-  #   runner_args: ["test"]
-  #   setup_commands:
-  #     - ["yarn", ["install"]]
-  #   holes_file: zod-smol.json
+  - source:
+      type: github
+      owner: colinhacks
+      name: zod
+      revision: 481c9ba1932203777f6fe9497bb2a8a1d33c620e
+      src_path: src
+      exclude_paths: ["src/__tests__"]
+    build_command: yarn
+    build_args: ["build"]
+    language: typescript
+    runner: jest
+    runner_command: yarn
+    runner_args: ["test", "--", "--no-colors"]
+    setup_commands:
+      - ["yarn", ["install"]]
+    holes_file: zod-smol.json
+  - source:
+      type: github
+      owner: helix-editor
+      name: helix
+      revision: ae6a0a9cfd377fbfa494760282498cf2ca322782
+      exclude_paths:
+        - .cargo
+        - .github
+        - book
+        - contrib
+        - docs
+        - helix-core/tests
+        - helix-term/tests
+        - helix-tui/tests
+        - helix-view/tests
+        - runtime
+        - xtask
+        - .envrc
+        - .gitattributes
+        - .gitignore
+        - .ignore
+        - CHANGELOG.md
+        - Cargo.lock
+        - Cargo.toml
+        - LICENSE
+        - README.md
+        - VERSION
+        - base16_theme.toml
+        - default.nix
+        - flake.lock
+        - flake.nix
+        - grammars.nix
+        - languages.toml
+        - logo.svg
+        - logo_dark.svg
+        - logo_light.svg
+        - rust-toolchain.toml
+        - rustfmt.toml
+        - screenshot.png
+        - shell.nix
+        - theme.toml
+    build_command: cargo
+    build_args: ["build"]
+    language: rust
+    runner: cargo
+    runner_extra_args: ["--workspace"]
+    setup_commands:
+      - ["cargo", ["build"]]
+    holes_file: helix-smol.json

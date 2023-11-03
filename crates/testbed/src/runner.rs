@@ -77,15 +77,30 @@ async fn pytest_runner(
     Ok(passed / (passed + failed))
 }
 
-async fn cargo_runner(override_cmd: &Option<String>, repo_path: &Path) -> anyhow::Result<f32> {
+async fn cargo_runner(
+    override_cmd: &Option<String>,
+    extra_args: &mut Vec<String>,
+    repo_path: &Path,
+) -> anyhow::Result<f32> {
     let cmd = if let Some(cmd) = override_cmd {
         cmd
     } else {
         "cargo"
     };
+    let mut args = vec![];
+    args.append(extra_args);
+    if !args.contains(&"--".to_owned()) {
+        args.push("--".to_owned());
+    }
+    args.extend([
+        "-Z".to_owned(),
+        "unstable-options".to_owned(),
+        "--format".to_owned(),
+        "json".to_owned(),
+    ]);
     let mut child = Command::new(cmd)
         .arg("test")
-        .args(["--", "-Z", "unstable-options", "--format", "json"])
+        .args(args)
         .current_dir(repo_path)
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -114,6 +129,60 @@ async fn cargo_runner(override_cmd: &Option<String>, repo_path: &Path) -> anyhow
     }
 
     Ok(passed as f32 / (passed as f32 + failed as f32))
+}
+
+async fn jest_runner(
+    override_cmd: &Option<String>,
+    override_args: &Option<Vec<String>>,
+    repo_path: &Path,
+) -> anyhow::Result<f32> {
+    let cmd = if let Some(cmd) = override_cmd {
+        cmd
+    } else {
+        "npm"
+    };
+    let default_args = vec!["run".to_owned(), "test".to_owned()];
+    let args = if let Some(args) = override_args {
+        args
+    } else {
+        &default_args
+    };
+    let mut child = Command::new(cmd)
+        .args(args)
+        .current_dir(repo_path)
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()?;
+
+    let mut stderr = String::new();
+    child
+        .stderr
+        .take()
+        .ok_or(anyhow!("failed to take stderr"))?
+        .read_to_string(&mut stderr)
+        .await?;
+    let lines = stderr.split_terminator('\n');
+    let mut passed = 0f32;
+    let mut failed = 0f32;
+    for line in lines {
+        if line.contains("Tests:") {
+            let words = line.trim().split(' ').collect::<Vec<&str>>();
+            let mut prev = words[0];
+            for word in words {
+                if word.contains("passed") {
+                    passed = prev.parse::<u32>()? as f32;
+                } else if line.contains("failed") {
+                    failed = prev.parse::<u32>()? as f32;
+                }
+                prev = word;
+            }
+        }
+    }
+    if passed == 0f32 && failed == 0f32 {
+        return Ok(0f32);
+    }
+
+    Ok(passed / (passed + failed))
 }
 
 async fn vitest_runner(
@@ -174,6 +243,7 @@ async fn vitest_runner(
 #[serde(rename_all = "snake_case")]
 pub enum Runner {
     Cargo,
+    Jest,
     Pytest,
     Vitest,
 }
@@ -186,7 +256,8 @@ pub async fn run_test(
     repo_path: &Path,
 ) -> anyhow::Result<f32> {
     match runner {
-        Runner::Cargo => cargo_runner(override_cmd, repo_path).await,
+        Runner::Cargo => cargo_runner(override_cmd, extra_args, repo_path).await,
+        Runner::Jest => jest_runner(override_cmd, override_args, repo_path).await,
         Runner::Pytest => pytest_runner(override_cmd, extra_args, repo_path).await,
         Runner::Vitest => vitest_runner(override_cmd, override_args, repo_path).await,
     }

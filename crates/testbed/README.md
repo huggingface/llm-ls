@@ -75,8 +75,6 @@ runner_extra_args:
 
 You can override the runners command with `runner_command`, which is useful when setting up dependencies in a venv.
 
-Note that the `cargo` runner does not support `runner_extra_args`.
-
 ## References
 
 testbed was inspired by [human-eval](https://github.com/openai/human-eval) and [RepoEval](https://arxiv.org/abs/2303.12570).
