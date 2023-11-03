@@ -36,6 +36,7 @@ jobs:
           sudo apt update
           sudo apt install pkg-config
           sudo apt install -y protobuf-compiler libssl-dev
+          npm i -g yarn
 
       - name: Set up cargo cache
         uses: actions/cache@v3
