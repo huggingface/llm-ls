@@ -104,8 +104,28 @@ repositories:
     runner: cargo
     # this is to avoid skewing the average hole completion time
     setup_commands:
-      - ["cargo", ["test", "--package", "vectordb", "--no-run"]]
+      - ["cargo", ["build"]]
     holes_file: lancedb-smol.json
+  - source:
+      type: github
+      owner: lancedb
+      name: lance
+      revision: 4f7fb490c6b36a659b2c40b3945b4d533356acf2
+      src_path: rust/vectordb/src
+      exclude_paths:
+        - .cargo
+        - .vscode
+        - .gitignore
+        - README.md
+        - img.png
+    build_command: cargo
+    build_args: ["build"]
+    language: rust
+    runner: cargo
+    # this is to avoid skewing the average hole completion time
+    setup_commands:
+      - ["cargo", ["build"]]
+    holes_file: lance-smol.json
   - source:
       type: github
       owner: tkaitchuck
@@ -197,7 +217,6 @@ repositories:
         - .ignore
         - CHANGELOG.md
         - Cargo.lock
-        - Cargo.toml
         - LICENSE
         - README.md
         - VERSION
