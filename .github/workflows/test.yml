@@ -11,7 +11,7 @@ concurrency:
 
 jobs:
   testbed:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, intel-cpu, 8-cpu, ci]
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4

@@ -70,6 +70,9 @@ async fn pytest_runner(
             return Ok(0f32);
         }
     }
+    if passed == 0f32 && failed == 0f32 {
+        return Ok(0f32);
+    }
 
     Ok(passed / (passed + failed))
 }
@@ -113,21 +116,78 @@ async fn cargo_runner(override_cmd: &Option<String>, repo_path: &Path) -> anyhow
     Ok(passed as f32 / (passed as f32 + failed as f32))
 }
 
+async fn vitest_runner(
+    override_cmd: &Option<String>,
+    override_args: &Option<Vec<String>>,
+    repo_path: &Path,
+) -> anyhow::Result<f32> {
+    let cmd = if let Some(cmd) = override_cmd {
+        cmd
+    } else {
+        "npm"
+    };
+    let default_args = vec!["run".to_owned(), "test".to_owned()];
+    let args = if let Some(args) = override_args {
+        args
+    } else {
+        &default_args
+    };
+    let mut child = Command::new(cmd)
+        .args(args)
+        .current_dir(repo_path)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()?;
+
+    let mut stdout = String::new();
+    child
+        .stdout
+        .take()
+        .ok_or(anyhow!("failed to take stdout"))?
+        .read_to_string(&mut stdout)
+        .await?;
+    let lines = stdout.split_terminator('\n');
+    let mut passed = 0f32;
+    let mut failed = 0f32;
+    for line in lines {
+        if line.contains("     Tests  ") {
+            let words = line.trim().split(' ').collect::<Vec<&str>>();
+            let mut prev = words[0];
+            for word in words {
+                if word.contains("passed") {
+                    passed = prev.parse::<u32>()? as f32;
+                } else if line.contains("failed") {
+                    failed = prev.parse::<u32>()? as f32;
+                }
+                prev = word;
+            }
+        }
+    }
+    if passed == 0f32 && failed == 0f32 {
+        return Ok(0f32);
+    }
+
+    Ok(passed / (passed + failed))
+}
+
 #[derive(Clone, Copy, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Runner {
     Cargo,
     Pytest,
+    Vitest,
 }
 
 pub async fn run_test(
     runner: Runner,
     override_cmd: &Option<String>,
+    override_args: &Option<Vec<String>>,
     extra_args: &mut Vec<String>,
     repo_path: &Path,
 ) -> anyhow::Result<f32> {
     match runner {
         Runner::Cargo => cargo_runner(override_cmd, repo_path).await,
         Runner::Pytest => pytest_runner(override_cmd, extra_args, repo_path).await,
+        Runner::Vitest => vitest_runner(override_cmd, override_args, repo_path).await,
     }
 }

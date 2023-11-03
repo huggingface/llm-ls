@@ -54,6 +54,11 @@ struct Args {
     #[arg(short, long)]
     api_token: Option<String>,
 
+    /// Comma separated list of repos in the repositories file to run completions or holes generation for;
+    /// matches on path for local repos and `owner/name` for github repos
+    #[arg(short, long)]
+    filter: Option<String>,
+
     /// When this is specified, holes files will be generated based on the repositories.yaml file
     #[arg(short, long, action)]
     generate_holes: bool,
@@ -83,6 +88,7 @@ struct Args {
 struct LocalRepo {
     path: PathBuf,
     src_path: String,
+    exclude_path: Option<String>,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -91,6 +97,7 @@ struct GithubRepo {
     name: String,
     revision: String,
     src_path: String,
+    exclude_path: Option<String>,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -115,6 +122,13 @@ impl RepoSource {
             Self::Github(github) => github.src_path.clone(),
         }
     }
+
+    fn exclude_path(&self) -> Option<String> {
+        match self {
+            Self::Local(local) => local.exclude_path.clone(),
+            Self::Github(github) => github.exclude_path.clone(),
+        }
+    }
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -125,6 +139,7 @@ struct Repository {
     language: Language,
     runner: Runner,
     runner_command: Option<String>,
+    runner_args: Option<Vec<String>>,
     #[serde(default)]
     runner_extra_args: Vec<String>,
     setup_commands: Option<Vec<(String, Vec<String>)>>,
@@ -457,6 +472,7 @@ async fn complete_holes(
                     run_test(
                         repo.runner,
                         &repo.runner_command,
+                        &repo.runner_args,
                         &mut repo.runner_extra_args.clone(),
                         &repo_path,
                     )
@@ -528,6 +544,12 @@ async fn main() -> anyhow::Result<()> {
         current_dir.join("crates/testbed/holes")
     };
 
+    let (filter_repos, filter_list) = if let Some(filter) = args.filter {
+        (true, filter.split(',').map(|s| s.to_owned()).collect())
+    } else {
+        (false, vec![])
+    };
+
     let mut repos_file = String::new();
     File::open(&repos_file_path)
         .await?
@@ -540,6 +562,8 @@ async fn main() -> anyhow::Result<()> {
             &repos_dir_path,
             &holes_dir_path,
             args.holes_per_repo,
+            filter_repos,
+            filter_list,
         )
         .await;
     }
@@ -562,6 +586,9 @@ async fn main() -> anyhow::Result<()> {
     // Query the model by batches of 64
     let semaphore = Arc::new(Semaphore::new(8));
     for repo in repositories {
+        if filter_repos && !filter_list.contains(&repo.name()) {
+            continue;
+        }
         let client = client.clone();
         let file_cache = file_cache.clone();
         let holes_dir_path = holes_dir_path.clone();

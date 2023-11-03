@@ -24,15 +24,21 @@ pub(crate) async fn generate_holes(
     repos_dir_path: &Path,
     holes_dir_path: &Path,
     holes_per_repo: usize,
+    filter_repos: bool,
+    filter_list: Vec<String>,
 ) -> anyhow::Result<()> {
     let mut rng = rand::thread_rng();
     for repo in repositories_config.repositories {
+        if filter_repos && !filter_list.contains(&repo.name()) {
+            continue;
+        }
         let repo_name = repo.name();
         info!("creating {} holes for {}", holes_per_repo, repo_name);
         let (_tmp_dir, path) = setup_repo_dir(repos_dir_path, &repo.source).await?;
         let mut files = vec![];
 
         let mut stack = VecDeque::new();
+        let exclude_path = repo.source.exclude_path().map(|p| path.join(p));
         stack.push_back(path.join(repo.source.src_path()));
         while let Some(src) = stack.pop_back() {
             let mut entries = fs::read_dir(&src).await?;
@@ -40,6 +46,11 @@ pub(crate) async fn generate_holes(
                 let entry_type = entry.file_type().await?;
 
                 let src_path = entry.path();
+                if let Some(path) = &exclude_path {
+                    if src_path.starts_with(path) {
+                        continue;
+                    }
+                }
 
                 if entry_type.is_dir() {
                     stack.push_back(src_path);

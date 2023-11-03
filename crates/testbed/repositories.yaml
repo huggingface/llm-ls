@@ -115,7 +115,6 @@ repositories:
     build_args: ["build"]
     language: rust
     runner: cargo
-    # this is to avoid skewing the average hole completion time
     setup_commands:
       - ["cargo", ["build"]]
     holes_file: constrandom.json
@@ -129,7 +128,6 @@ repositories:
     build_args: ["build"]
     language: rust
     runner: cargo
-    # this is to avoid skewing the average hole completion time
     setup_commands:
       - ["cargo", ["build"]]
     holes_file: cached.json
@@ -143,7 +141,35 @@ repositories:
     build_args: ["build"]
     language: rust
     runner: cargo
-    # this is to avoid skewing the average hole completion time
     setup_commands:
       - ["cargo", ["build"]]
     holes_file: async-executor.json
+  - source:
+      type: github
+      owner: gcanti
+      name: io-ts
+      revision: 616583de0198632cad7820ed8701b15f654c7fd2
+      src_path: src
+    build_command: npm
+    build_args: ["run", "build"]
+    language: typescript
+    runner: vitest
+    setup_commands:
+      - ["npm", ["install"]]
+    holes_file: io-ts.json
+  # - source:
+  #     type: github
+  #     owner: colinhacks
+  #     name: zod
+  #     revision: 481c9ba1932203777f6fe9497bb2a8a1d33c620e
+  #     src_path: src
+  #     exclude_path: src/__tests__
+  #   build_command: yarn
+  #   build_args: ["build"]
+  #   language: typescript
+  #   runner: npm
+  #   runner_command: yarn
+  #   runner_args: ["test"]
+  #   setup_commands:
+  #     - ["yarn", ["install"]]
+  #   holes_file: zod.json
