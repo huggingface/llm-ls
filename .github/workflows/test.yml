@@ -26,9 +26,10 @@ jobs:
         with:
           python-version: '3.10'
 
-      - name: Install LanceDB dependencies
+      - name: Install dependencies
         run: |
           sudo apt update
+          sudo apt install pkg-config
           sudo apt install -y protobuf-compiler libssl-dev
 
       - name: Set up cargo cache
