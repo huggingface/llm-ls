@@ -21,7 +21,7 @@ jobs:
       - name: Install dependencies
         run: |
           apt update
-          apt install -y pkg-config protobuf-compiler libssl-dev curl build-essential git-all
+          DEBIAN_FRONTEND=noninteractive apt install -y pkg-config protobuf-compiler libssl-dev curl build-essential git-all
 
       - name: Install Rust toolchain
         uses: actions-rust-lang/setup-rust-toolchain@v1
@@ -59,7 +59,7 @@ jobs:
         run: cargo build -r
 
       - name: Run testbed
-        run: cargo run --bin testbed -r -- --api-token $API_TOKEN -r `pwd`/crates/testbed/repositories-ci.yaml  -f helix-editor/helix
+        run: cargo run --bin testbed -r -- --api-token $API_TOKEN -r `pwd`/crates/testbed/repositories-ci.yaml -f helix-editor/helix
         if: github.event_name == 'push' || github.event_name == 'pull_request'
         env:
           API_TOKEN: ${{ secrets.API_TOKEN }}
