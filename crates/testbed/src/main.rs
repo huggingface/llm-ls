@@ -3,7 +3,7 @@ use std::{
     fmt::Display,
     io::BufReader,
     path::{Path, PathBuf},
-    // process::Stdio,
+    process::Stdio,
     sync::Arc,
     time::Instant,
 };
@@ -343,8 +343,8 @@ async fn run_setup(
         let status = status_cmd
             .args(&command.1)
             .current_dir(&repo_path)
-            // .stdout(Stdio::null())
-            // .stderr(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
             .spawn()?
             .wait()
             .await?;
@@ -375,8 +375,8 @@ async fn build(
     let status = status_cmd
         .args(args)
         .current_dir(repo_path)
-        // .stdout(Stdio::null())
-        // .stderr(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
         .spawn()?
         .wait()
         .await?;
