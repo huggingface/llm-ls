@@ -21,7 +21,7 @@ jobs:
       - name: Install dependencies
         run: |
           apt update
-          apt install -y pkg-config protobuf-compiler libssl-dev curl build-essential
+          apt install -y pkg-config protobuf-compiler libssl-dev curl build-essential git-all
 
       - name: Install Rust toolchain
         uses: actions-rust-lang/setup-rust-toolchain@v1

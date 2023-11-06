@@ -1,6 +1,7 @@
 [package]
 name = "testbed"
 version = "0.1.0"
+resolver = "2"
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
@@ -31,8 +32,4 @@ zip = "0.6"
 
 [dependencies.uuid]
 version = "1.5"
-features = [
-    "v4",
-    "fast-rng",
-    "serde",
-]
+features = ["v4", "fast-rng", "serde"]
