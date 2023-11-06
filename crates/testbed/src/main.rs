@@ -138,7 +138,7 @@ impl RepoSource {
 struct Repository {
     build_command: String,
     build_args: Vec<String>,
-    env: Vec<String>,
+    env: Option<Vec<String>>,
     holes_file: String,
     language: Language,
     runner: Runner,
@@ -314,21 +314,23 @@ async fn setup_repo_dir(
     }
 }
 
-fn parse_env(env: &Vec<String>) -> anyhow::Result<Vec<(String, String)>> {
-    let mut env_vars = Vec::with_capacity(env.len());
-    for var in env {
-        env_vars.push(
-            var.split_once('=')
-                .map(|(n, v)| (n.to_owned(), v.to_owned()))
-                .ok_or(anyhow!("failed to split env var {var}"))?,
-        );
+fn parse_env(env: &Option<Vec<String>>) -> anyhow::Result<Vec<(String, String)>> {
+    let mut env_vars = vec![];
+    if let Some(env) = env {
+        for var in env {
+            env_vars.push(
+                var.split_once('=')
+                    .map(|(n, v)| (n.to_owned(), v.to_owned()))
+                    .ok_or(anyhow!("failed to split env var {var}"))?,
+            );
+        }
     }
     Ok(env_vars)
 }
 
 async fn run_setup(
     commands: &Vec<(String, Vec<String>)>,
-    env: &Vec<String>,
+    env: &Option<Vec<String>>,
     repo_path: impl AsRef<Path>,
 ) -> anyhow::Result<()> {
     let parsed_env = parse_env(env)?;
@@ -360,7 +362,7 @@ async fn run_setup(
 async fn build(
     command: &str,
     args: &Vec<String>,
-    env: &Vec<String>,
+    env: &Option<Vec<String>>,
     repo_path: impl AsRef<Path>,
 ) -> anyhow::Result<bool> {
     let parsed_env = parse_env(env)?;

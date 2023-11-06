@@ -82,7 +82,7 @@ async fn pytest_runner(
 async fn cargo_runner(
     override_cmd: &Option<String>,
     extra_args: &mut Vec<String>,
-    env: &Vec<String>,
+    env: &Option<Vec<String>>,
     repo_path: &Path,
 ) -> anyhow::Result<f32> {
     let cmd = if let Some(cmd) = override_cmd {
@@ -261,7 +261,7 @@ pub async fn run_test(
     override_cmd: &Option<String>,
     override_args: &Option<Vec<String>>,
     extra_args: &mut Vec<String>,
-    env: &Vec<String>,
+    env: &Option<Vec<String>>,
     repo_path: &Path,
 ) -> anyhow::Result<f32> {
     match runner {

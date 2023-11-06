@@ -119,13 +119,12 @@ repositories:
         - README.md
         - img.png
     build_command: cargo
-    build_args: ["build", "--all-features"]
+    build_args: ["build", "--all-features", "--manifest-path", "rust/Cargo.toml"]
     language: rust
     runner: cargo
-    runner_extra_args: ["--all-features"]
-    # this is to avoid skewing the average hole completion time
+    runner_extra_args: ["--all-features", "--manifest-path", "rust/Cargo.toml"]
     setup_commands:
-      - ["cargo", ["build", "--all-features"]]
+      - ["cargo", ["build", "--all-features", "--manifest-path", "rust/Cargo.toml"]]
     holes_file: lance.json
   - source:
       type: github
@@ -238,7 +237,7 @@ repositories:
     build_command: cargo
     build_args: ["build"]
     env:
-      - RUSTFLAGS=$RUSTFLAGS -A dead_code
+      - RUSTFLAGS=-A dead_code
     language: rust
     runner: cargo
     runner_extra_args: ["--workspace"]
