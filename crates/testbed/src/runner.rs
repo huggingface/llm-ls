@@ -101,6 +101,7 @@ async fn cargo_runner(
     let mut child = Command::new(cmd)
         .arg("test")
         .args(args)
+        .env("RUSTFLAGS", "$RUSTFLAGS -A dead_code")
         .current_dir(repo_path)
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
