@@ -92,41 +92,41 @@ repositories:
       - ["starlette-venv/bin/python3", ["-m", "pip", "install", "--upgrade", "pip"]]
       - ["starlette-venv/bin/python3", ["-m", "pip", "install", "-r", "requirements.txt"]]
     holes_file: starlette-smol.json
-  # - source:
-  #     type: github
-  #     owner: lancedb
-  #     name: lancedb
-  #     revision: 682e95fa8388d5839c8a782063beb307c4fca4bc
-  #     src_path: rust/vectordb/src
-  #   build_command: cargo
-  #   build_args: ["build"]
-  #   language: rust
-  #   runner: cargo
-  #   # this is to avoid skewing the average hole completion time
-  #   setup_commands:
-  #     - ["cargo", ["build"]]
-  #   holes_file: lancedb-smol.json
-  # - source:
-  #     type: github
-  #     owner: lancedb
-  #     name: lance
-  #     revision: 4f7fb490c6b36a659b2c40b3945b4d533356acf2
-  #     src_path: rust
-  #     exclude_paths:
-  #       - .cargo
-  #       - .vscode
-  #       - .gitignore
-  #       - README.md
-  #       - img.png
-  #   build_command: cargo
-  #   build_args: ["build", "--all-features"]
-  #   language: rust
-  #   runner: cargo
-  #   runner_extra_args: ["--all-features"]
-  #   # this is to avoid skewing the average hole completion time
-  #   setup_commands:
-  #     - ["cargo", ["build", "--all-features"]]
-  #   holes_file: lance-smol.json
+  - source:
+      type: github
+      owner: lancedb
+      name: lancedb
+      revision: 682e95fa8388d5839c8a782063beb307c4fca4bc
+      src_path: rust/vectordb/src
+    build_command: cargo
+    build_args: ["build"]
+    language: rust
+    runner: cargo
+    # this is to avoid skewing the average hole completion time
+    setup_commands:
+      - ["cargo", ["build"]]
+    holes_file: lancedb-smol.json
+  - source:
+      type: github
+      owner: lancedb
+      name: lance
+      revision: 4f7fb490c6b36a659b2c40b3945b4d533356acf2
+      src_path: rust
+      exclude_paths:
+        - .cargo
+        - .vscode
+        - .gitignore
+        - README.md
+        - img.png
+    build_command: cargo
+    build_args: ["build", "--all-features"]
+    language: rust
+    runner: cargo
+    runner_extra_args: ["--all-features"]
+    # this is to avoid skewing the average hole completion time
+    setup_commands:
+      - ["cargo", ["build", "--all-features"]]
+    holes_file: lance-smol.json
   - source:
       type: github
       owner: tkaitchuck

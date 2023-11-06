@@ -12,6 +12,8 @@ concurrency:
 jobs:
   testbed:
     runs-on: [self-hosted, intel-cpu, 8-cpu, ci]
+    container:
+      image: ubuntu:22.04
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
