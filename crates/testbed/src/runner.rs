@@ -3,6 +3,7 @@ use std::{path::Path, process::Stdio};
 use anyhow::anyhow;
 use serde::{Deserialize, Serialize};
 use tokio::{io::AsyncReadExt, process::Command};
+use tracing::debug;
 
 use crate::parse_env;
 
@@ -37,6 +38,7 @@ async fn pytest_runner(
         "--no-header".to_owned(),
     ];
     args.append(extra_args);
+    debug!("running pytest tests: {cmd} {args:?}");
     let mut child = Command::new(cmd)
         .args(args)
         .current_dir(repo_path)
@@ -101,6 +103,7 @@ async fn cargo_runner(
         "--format".to_owned(),
         "json".to_owned(),
     ]);
+    debug!("running cargo tests: {cmd} test {args:?}");
     let parsed_env = parse_env(env)?;
     let mut cmd = Command::new(cmd);
     for (name, value) in parsed_env {
@@ -155,6 +158,7 @@ async fn jest_runner(
     } else {
         &default_args
     };
+    debug!("running jest tests: {cmd} {args:?}");
     let mut child = Command::new(cmd)
         .args(args)
         .current_dir(repo_path)
@@ -209,6 +213,7 @@ async fn vitest_runner(
     } else {
         &default_args
     };
+    debug!("running vitest tests: {cmd} {args:?}");
     let mut child = Command::new(cmd)
         .args(args)
         .current_dir(repo_path)

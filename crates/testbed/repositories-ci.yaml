@@ -124,6 +124,9 @@ repositories:
     runner: cargo
     runner_extra_args: ["--all-features", "--manifest-path", "rust/Cargo.toml"]
     setup_commands:
+      - ["rm", ["rust/lance-core/protos", "rust/lance-index/protos"]]
+      - ["ln", ["-s", "../../protos", "rust/lance-core/protos"]]
+      - ["ln", ["-s", "../../protos", "rust/lance-index/protos"]]
       - ["cargo", ["build", "--all-features", "--manifest-path", "rust/Cargo.toml"]]
     holes_file: lance-smol.json
   - source:

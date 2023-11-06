@@ -339,11 +339,12 @@ async fn run_setup(
         for (name, value) in &parsed_env {
             status_cmd.env(name, value);
         }
+        debug!("running setup command: {} {:?}", command.0, command.1);
         let status = status_cmd
             .args(&command.1)
             .current_dir(&repo_path)
-            // .stdout(Stdio::null())
-            // .stderr(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
             .spawn()?
             .wait()
             .await?;
@@ -370,6 +371,7 @@ async fn build(
     for (name, value) in parsed_env {
         status_cmd.env(name, value);
     }
+    debug!("building repo: {command} {args:?}");
     let status = status_cmd
         .args(args)
         .current_dir(repo_path)

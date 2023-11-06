@@ -3,7 +3,8 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use rand::Rng;
+use anyhow::anyhow;
+use rand::{seq::SliceRandom, Rng};
 use ropey::Rope;
 use tokio::{
     fs::{self, OpenOptions},
@@ -71,43 +72,32 @@ pub(crate) async fn generate_holes(
             }
         }
 
-        let file_count = files.len();
         let mut holes = vec![];
-        let holes_per_file = holes_per_repo / file_count;
-        let holes_per_file = if holes_per_file == 0 {
-            1
-        } else {
-            holes_per_file
-        };
-        let files_with_extra_holes = holes_per_repo % file_count;
-        for (idx, file_path) in files.iter().enumerate() {
-            let mut holes_for_file = holes_per_file;
-            if idx < files_with_extra_holes {
-                holes_for_file += 1;
-            }
+        let mut i = 0;
+        while i < holes_per_repo {
+            let file_path = files
+                .choose(&mut rng)
+                .ok_or(anyhow!("files vec is empty"))?;
             let mut content = String::new();
             fs::File::open(&file_path)
                 .await?
                 .read_to_string(&mut content)
                 .await?;
             let rope = Rope::from_str(&content);
-            let mut i = 0;
-            while i < holes_for_file {
-                let line_nb = rng.gen_range(0..rope.len_lines());
-                let line = rope.line(line_nb);
-                let line_string = line.to_string();
-                let trimmed = line_string.trim();
-                if trimmed.starts_with(repo.language.comment_token()) || trimmed.is_empty() {
-                    continue;
-                }
-                let column_nb = rng.gen_range(0..15.min(line.len_chars()));
-                holes.push(Hole::new(
-                    line_nb as u32,
-                    column_nb as u32,
-                    file_path.strip_prefix(&path)?.to_str().unwrap().to_owned(),
-                ));
-                i += 1;
+            let line_nb = rng.gen_range(0..rope.len_lines());
+            let line = rope.line(line_nb);
+            let line_string = line.to_string();
+            let trimmed = line_string.trim();
+            if trimmed.starts_with(repo.language.comment_token()) || trimmed.is_empty() {
+                continue;
             }
+            let column_nb = rng.gen_range(0..15.min(line.len_chars()));
+            holes.push(Hole::new(
+                line_nb as u32,
+                column_nb as u32,
+                file_path.strip_prefix(&path)?.to_str().unwrap().to_owned(),
+            ));
+            i += 1;
         }
         let mut file = OpenOptions::new()
             .create(true)
