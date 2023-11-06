@@ -4,6 +4,8 @@ use anyhow::anyhow;
 use serde::{Deserialize, Serialize};
 use tokio::{io::AsyncReadExt, process::Command};
 
+use crate::parse_env;
+
 #[derive(Deserialize, Serialize)]
 struct TestSuiteResult {
     r#type: String,
@@ -80,6 +82,7 @@ async fn pytest_runner(
 async fn cargo_runner(
     override_cmd: &Option<String>,
     extra_args: &mut Vec<String>,
+    env: &Vec<String>,
     repo_path: &Path,
 ) -> anyhow::Result<f32> {
     let cmd = if let Some(cmd) = override_cmd {
@@ -98,10 +101,14 @@ async fn cargo_runner(
         "--format".to_owned(),
         "json".to_owned(),
     ]);
-    let mut child = Command::new(cmd)
+    let parsed_env = parse_env(env)?;
+    let mut cmd = Command::new(cmd);
+    for (name, value) in parsed_env {
+        cmd.env(name, value);
+    }
+    let mut child = cmd
         .arg("test")
         .args(args)
-        .env("RUSTFLAGS", "$RUSTFLAGS -A dead_code")
         .current_dir(repo_path)
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -254,10 +261,11 @@ pub async fn run_test(
     override_cmd: &Option<String>,
     override_args: &Option<Vec<String>>,
     extra_args: &mut Vec<String>,
+    env: &Vec<String>,
     repo_path: &Path,
 ) -> anyhow::Result<f32> {
     match runner {
-        Runner::Cargo => cargo_runner(override_cmd, extra_args, repo_path).await,
+        Runner::Cargo => cargo_runner(override_cmd, extra_args, env, repo_path).await,
         Runner::Jest => jest_runner(override_cmd, override_args, repo_path).await,
         Runner::Pytest => pytest_runner(override_cmd, extra_args, repo_path).await,
         Runner::Vitest => vitest_runner(override_cmd, override_args, repo_path).await,

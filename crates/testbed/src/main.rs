@@ -138,6 +138,7 @@ impl RepoSource {
 struct Repository {
     build_command: String,
     build_args: Vec<String>,
+    env: Vec<String>,
     holes_file: String,
     language: Language,
     runner: Runner,
@@ -313,12 +314,30 @@ async fn setup_repo_dir(
     }
 }
 
+fn parse_env(env: &Vec<String>) -> anyhow::Result<Vec<(String, String)>> {
+    let mut env_vars = Vec::with_capacity(env.len());
+    for var in env {
+        env_vars.push(
+            var.split_once('=')
+                .map(|(n, v)| (n.to_owned(), v.to_owned()))
+                .ok_or(anyhow!("failed to split env var {var}"))?,
+        );
+    }
+    Ok(env_vars)
+}
+
 async fn run_setup(
     commands: &Vec<(String, Vec<String>)>,
+    env: &Vec<String>,
     repo_path: impl AsRef<Path>,
 ) -> anyhow::Result<()> {
+    let parsed_env = parse_env(env)?;
     for command in commands {
-        let status = Command::new(&command.0)
+        let mut status_cmd = Command::new(&command.0);
+        for (name, value) in &parsed_env {
+            status_cmd.env(name, value);
+        }
+        let status = status_cmd
             .args(&command.1)
             .current_dir(&repo_path)
             // .stdout(Stdio::null())
@@ -326,6 +345,7 @@ async fn run_setup(
             .spawn()?
             .wait()
             .await?;
+
         if !status.success() {
             return Err(anyhow!(
                 "error running: \"{} {}\"",
@@ -340,9 +360,15 @@ async fn run_setup(
 async fn build(
     command: &str,
     args: &Vec<String>,
+    env: &Vec<String>,
     repo_path: impl AsRef<Path>,
 ) -> anyhow::Result<bool> {
-    let status = Command::new(command)
+    let parsed_env = parse_env(env)?;
+    let mut status_cmd = Command::new(command);
+    for (name, value) in parsed_env {
+        status_cmd.env(name, value);
+    }
+    let status = status_cmd
         .args(args)
         .current_dir(repo_path)
         .stdout(Stdio::null())
@@ -392,7 +418,7 @@ async fn complete_holes(
         } = repos_config;
         let (_temp_dir, repo_path) = setup_repo_dir(&repos_dir_path, &repo.source).await?;
         if let Some(commands) = &repo.setup_commands {
-            run_setup(commands, &repo_path).await?;
+            run_setup(commands, &repo.env, &repo_path).await?;
         }
         let mut hole_completions_result = Vec::with_capacity(holes.len());
         for (idx, hole) in holes.iter().enumerate() {
@@ -471,12 +497,13 @@ async fn complete_holes(
                 .await?;
             file.write_all(file_content.to_string().as_bytes()).await?;
             let test_percentage =
-                if build(&repo.build_command, &repo.build_args, &repo_path).await? {
+                if build(&repo.build_command, &repo.build_args, &repo.env, &repo_path).await? {
                     run_test(
                         repo.runner,
                         &repo.runner_command,
                         &repo.runner_args,
                         &mut repo.runner_extra_args.clone(),
+                        &repo.env,
                         &repo_path,
                     )
                     .await?
