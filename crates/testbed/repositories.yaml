@@ -239,8 +239,6 @@ repositories:
         - theme.toml
     build_command: cargo
     build_args: ["build"]
-    env:
-      - RUSTFLAGS=-A dead_code
     language: rust
     runner: cargo
     runner_extra_args: ["--workspace"]
