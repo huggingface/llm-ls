@@ -17,7 +17,7 @@ jobs:
           - { name: simple, key: simple }
           - { name: mmaitre314/picklescan, key: picklescan }
           - { name: huggingface/huggingface_hub, key: huggingface_hub }
-          - { name: tiangolo/fastapi, key: fastap }
+          - { name: tiangolo/fastapi, key: fastapi }
           - { name: encode/starlette, key: starlette }
           - { name: lancedb/lancedb, key: lancedb }
           - { name: lancedb/lance, key: lance }
