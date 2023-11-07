@@ -1,7 +1,6 @@
 use ropey::Rope;
 use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::Range;
-use tracing::info;
 use tree_sitter::{InputEdit, Parser, Point, Tree};
 
 use crate::language_id::LanguageId;

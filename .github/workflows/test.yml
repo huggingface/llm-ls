@@ -10,6 +10,11 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  repo_matrix:
+    strategy:
+      matrix:
+        repo: [simple, mmaitre314/picklescan, huggingface/huggingface_hub, tiangolo/fastapi, encode/starlette, lancedb/lancedb, lancedb/lance, tkaitchuck/constrandom, jaemk/cached, smol-rs/async-executor, gcanti/io-ts, colinhacks/zod, helix-editor/helix]
+
   testbed:
     runs-on: [self-hosted, intel-cpu, 8-cpu, ci]
     container:
@@ -60,13 +65,13 @@ jobs:
         run: cargo build -r
 
       - name: Run testbed
-        run: cargo run --bin testbed -r -- --api-token $API_TOKEN -r `pwd`/crates/testbed/repositories-ci.yaml
+        run: 'cargo run --bin testbed -r -- --api-token $API_TOKEN -r `pwd`/crates/testbed/repositories-ci.yaml -f ${{ matrix.repo }}'
         if: github.event_name == 'push' || github.event_name == 'pull_request'
         env:
           API_TOKEN: ${{ secrets.API_TOKEN }}
 
       - name: Run testbed
-        run: cargo run --bin testbed -r -- --api-token $API_TOKEN
+        run: 'cargo run --bin testbed -r -- --api-token $API_TOKEN -f ${{ matrix.repo }}'
         if: github.event_name == 'workflow_dispatch'
         env:
           API_TOKEN: ${{ secrets.API_TOKEN }}
