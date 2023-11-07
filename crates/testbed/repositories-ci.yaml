@@ -178,7 +178,7 @@ repositories:
     build_args: ["run", "build"]
     language: typescript
     runner: vitest
-    runner_args: ["run", "vitest", "--", "--no-colors"]
+    runner_args: ["run", "vitest", "--", "--no-color"]
     setup_commands:
       - ["npm", ["install"]]
     holes_file: io-ts-smol.json
