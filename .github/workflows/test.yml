@@ -82,6 +82,11 @@ jobs:
 
   comment_results:
     steps:
+      - name: Install dependencies
+        run: |
+          apt update
+          apt install -y jq
+
       - uses: actions/download-artifact@v1
         with:
           name: results-simple
