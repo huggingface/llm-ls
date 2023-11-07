@@ -74,6 +74,99 @@ jobs:
         env:
           API_TOKEN: ${{ secrets.API_TOKEN }}
 
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v1
+        with:
+          name: results-${{ matrix.repo }}
+          path: ./results.json
+
+  comment_results:
+    steps:
+      - uses: actions/download-artifact@v1
+        with:
+          name: results-simple
+          path: results-simple.json
+
+      - uses: actions/download-artifact@v1
+        with:
+          name: results-mmaitre314/picklescan
+          path: results-picklescan.json
+
+      - uses: actions/download-artifact@v1
+        with:
+          name: results-huggingface/huggingface_hub
+          path: results-huggingface_hub.json
+
+      - uses: actions/download-artifact@v1
+        with:
+          name: results-tiangolo/fastapi
+          path: results-fastapi.json
+
+      - uses: actions/download-artifact@v1
+        with:
+          name: results-encode/starlette
+          path: results-starlette.json
+
+      - uses: actions/download-artifact@v1
+        with:
+          name: results-lancedb/lancedb
+          path: results-lancedb.json
+
+      - uses: actions/download-artifact@v1
+        with:
+          name: results-lancedb/lancedb
+          path: results-lancedb.json
+
+      - uses: actions/download-artifact@v1
+        with:
+          name: results-lancedb/lance
+          path: results-lance.json
+
+      - uses: actions/download-artifact@v1
+        with:
+          name: results-tkaitchuck/constrandom
+          path: results-constrandom.json
+
+      - uses: actions/download-artifact@v1
+        with:
+          name: results-jaemk/cached
+          path: results-cached.json
+
+      - uses: actions/download-artifact@v1
+        with:
+          name: results-smol-rs/async-executor
+          path: results-async-executor.json
+
+      - uses: actions/download-artifact@v1
+        with:
+          name: results-gcanti/io-ts
+          path: results-io-ts
+
+      - uses: actions/download-artifact@v1
+        with:
+          name: results-colinhacks/zod
+          path: results-zod
+
+      - uses: actions/download-artifact@v1
+        with:
+          name: results-helix-editor/helix
+          path: results-helix.json
+
+      - name: output to markdown
+        run: |
+          cat > results.md  <<EOF
+          | Repository name | Source type | Average hole completion time (s) | Pass percentage |
+          | :-------------- | :---------- | -------------------------------: | --------------: |
+          EOF
+          cat results-*.json | jq -r '"| \(.[0].repo_name) | \(.[0].source_type) | \(.[0].avg_hole_completion_time_ms) | \(.[0].pass_percentage)% |"' >> results.md
+          cat >> results.md <<EOF
+          **Note:** The "hole completion time" represents the full process of:
+            - copying files from the setup cache directory
+            - replacing the code from the file with a completion from the model
+            - building the project
+            - running the tests
+          EOF
+
       - name: Find Comment
         uses: peter-evans/find-comment@v2
         id: fc

@@ -714,51 +714,33 @@ async fn main() -> anyhow::Result<()> {
             })
             .or_insert((res.completion_time_ms, res.pass_percentage, 1f32));
     }
-    let mut results_table =
-        "| Repository name | Source type | Average hole completion time (s) | Pass percentage |\n| :-------------- | :---------- | -------------------------------: | --------------: |\n".to_owned();
-    let mut total_time = 0;
-    let mut total_percentage = 0f32;
-    let mut total_count = 0f32;
-    for (k, v) in results_map.iter() {
-        let avg = v.1 / v.2;
-        let avg_time = v.0 as f32 / v.2;
-        results_table.push_str(&format!(
-            "| {} | {} | {} | {}% |\n",
-            k.0,
-            k.1,
-            avg_time / 1_000f32,
-            avg * 100f32
-        ));
-        total_percentage += v.1;
-        total_count += v.2;
-        total_time += v.0;
-    }
-    let total_avg = total_percentage / total_count;
-    let total_time_avg = total_time as f32 / total_count;
-    results_table.push_str(&format!(
-        "| **Total**       | --          | {} | {}% |\n\n",
-        total_time_avg / 1_000f32,
-        total_avg * 100f32
-    ));
-    results_table.push_str(
-        &[
-            "**Note:** The \"hole completion time\" represents the full process of:",
-            "  - replacing the code from the file with a completion from the model",
-            "  - building the project",
-            "  - running the tests",
-        ]
-        .join("\n"),
-    );
-    info!("llm-ls results:\n{}", results_table);
+    let json_result = results_map
+        .iter()
+        .map(|(k, v)| {
+            let avg_hole_completion_time_ms = v.0 as f32 / v.2 / 1_000f32;
+            let pass_percentage = v.1 / v.2 * 100f32;
+            info!(
+                "{} from {} obtained {}% in {}s",
+                k.0, k.1, pass_percentage, avg_hole_completion_time_ms
+            );
+            serde_json::json!({
+                "repo_name": k.0,
+                "source_type": k.1,
+                "avg_hole_completion_time_ms": avg_hole_completion_time_ms,
+                "pass_percentage": pass_percentage,
+            })
+        })
+        .collect::<Vec<serde_json::Value>>();
     OpenOptions::new()
         .create(true)
         .write(true)
         .truncate(true)
-        .open("results.md")
+        .open("results.json")
         .await?
-        .write_all(results_table.as_bytes())
+        .write_all(serde_json::to_string(&json_result)?.as_bytes())
         .await?;
 
+    info!("all tests were run, exiting");
     client.shutdown().await?;
     match Arc::into_inner(client) {
         Some(client) => client.exit().await,

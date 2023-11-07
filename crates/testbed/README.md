@@ -11,9 +11,10 @@ Here is a simplified pseudo code algorithm for testbed:
 read the repositories file
 read the holes file(s)
 for each repository
-  spawn a thread
-  setup the repository
   for each hole
+    spawn a thread
+    setup the repository -- only once for each repository
+    copy files from the setup cache to a new temp dir
     make the hole as specified by the file
     generate completions
     build the code
@@ -37,7 +38,7 @@ Before running testbed, you will need to generate a holes file for each reposito
 
 ### Setup
 
-testbed runs completions for each repository in parallel. It will first create a temporary directory, then copy or download the repository's source files to that location and finally run the setup commands.
+testbed runs hole completions in parallel. It will first, and only once per repository, create a temporary directory, then copy or download the repository's source files to that location and finally run the setup commands. Then for each subsequent completion it will copy the content of the "setup directory" to a new temporary directory so that work can be parallelised.
 
 Setup commands are useful to install dependencies.
 
@@ -60,9 +61,11 @@ build_args: ["-m", "compileall", "-q", "."]
 
 ### Runners
 
-testbed supports two test runners at the moment:
+testbed supports four test runners:
 - cargo
+- jest
 - pytest
+- vitest
 
 To configure your runner, you have the following options:
 ```yaml
