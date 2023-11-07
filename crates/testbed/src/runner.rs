@@ -3,7 +3,7 @@ use std::{path::Path, process::Stdio};
 use anyhow::anyhow;
 use serde::{Deserialize, Serialize};
 use tokio::{io::AsyncReadExt, process::Command};
-use tracing::debug;
+use tracing::{debug, info};
 
 use crate::parse_env;
 
@@ -218,7 +218,7 @@ async fn vitest_runner(
         .args(args)
         .current_dir(repo_path)
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        // .stderr(Stdio::null())
         .spawn()?;
 
     let mut stdout = String::new();
@@ -228,6 +228,7 @@ async fn vitest_runner(
         .ok_or(anyhow!("failed to take stdout"))?
         .read_to_string(&mut stdout)
         .await?;
+    info!("stdout: {stdout}");
     let lines = stdout.split_terminator('\n');
     let mut passed = 0f32;
     let mut failed = 0f32;
