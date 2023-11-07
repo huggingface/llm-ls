@@ -38,7 +38,7 @@ async fn pytest_runner(
         "--no-header".to_owned(),
     ];
     args.append(extra_args);
-    debug!("running pytest tests: {cmd} {args:?}");
+    debug!("running pytest tests: {cmd} {}", args.join(" "));
     let mut child = Command::new(cmd)
         .args(args)
         .current_dir(repo_path)
@@ -103,7 +103,7 @@ async fn cargo_runner(
         "--format".to_owned(),
         "json".to_owned(),
     ]);
-    debug!("running cargo tests: {cmd} test {args:?}");
+    debug!("running cargo tests: {cmd} test {}", args.join(" "));
     let parsed_env = parse_env(env)?;
     let mut cmd = Command::new(cmd);
     for (name, value) in parsed_env {
@@ -158,7 +158,7 @@ async fn jest_runner(
     } else {
         &default_args
     };
-    debug!("running jest tests: {cmd} {args:?}");
+    debug!("running jest tests: {cmd} {}", args.join(" "));
     let mut child = Command::new(cmd)
         .args(args)
         .current_dir(repo_path)
@@ -213,7 +213,7 @@ async fn vitest_runner(
     } else {
         &default_args
     };
-    debug!("running vitest tests: {cmd} {args:?}");
+    debug!("running vitest tests: {cmd} {}", args.join(" "));
     let mut child = Command::new(cmd)
         .args(args)
         .current_dir(repo_path)
@@ -232,7 +232,7 @@ async fn vitest_runner(
     let mut passed = 0f32;
     let mut failed = 0f32;
     for line in lines {
-        if line.contains("     Tests  ") {
+        if line.contains("Tests") {
             let words = line.trim().split(' ').collect::<Vec<&str>>();
             let mut prev = words[0];
             for word in words {
