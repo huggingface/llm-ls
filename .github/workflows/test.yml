@@ -10,12 +10,10 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  repo_matrix:
+  testbed:
     strategy:
       matrix:
         repo: [simple, mmaitre314/picklescan, huggingface/huggingface_hub, tiangolo/fastapi, encode/starlette, lancedb/lancedb, lancedb/lance, tkaitchuck/constrandom, jaemk/cached, smol-rs/async-executor, gcanti/io-ts, colinhacks/zod, helix-editor/helix]
-
-  testbed:
     runs-on: [self-hosted, intel-cpu, 8-cpu, ci]
     container:
       image: ubuntu:22.04
