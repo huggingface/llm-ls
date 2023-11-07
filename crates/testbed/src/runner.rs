@@ -3,7 +3,7 @@ use std::{path::Path, process::Stdio};
 use anyhow::anyhow;
 use serde::{Deserialize, Serialize};
 use tokio::{io::AsyncReadExt, process::Command};
-use tracing::{debug, info};
+use tracing::debug;
 
 use crate::parse_env;
 
@@ -213,12 +213,11 @@ async fn vitest_runner(
     } else {
         &default_args
     };
-    debug!("running vitest tests: {cmd} {args:?}");
     let mut child = Command::new(cmd)
         .args(args)
         .current_dir(repo_path)
         .stdout(Stdio::piped())
-        // .stderr(Stdio::null())
+        .stderr(Stdio::null())
         .spawn()?;
 
     let mut stdout = String::new();
@@ -228,12 +227,11 @@ async fn vitest_runner(
         .ok_or(anyhow!("failed to take stdout"))?
         .read_to_string(&mut stdout)
         .await?;
-    info!("stdout: {stdout}");
     let lines = stdout.split_terminator('\n');
     let mut passed = 0f32;
     let mut failed = 0f32;
     for line in lines {
-        if line.contains("     Tests  ") {
+        if line.contains("Tests") {
             let words = line.trim().split(' ').collect::<Vec<&str>>();
             let mut prev = words[0];
             for word in words {
