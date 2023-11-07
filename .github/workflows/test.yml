@@ -13,7 +13,20 @@ jobs:
   testbed:
     strategy:
       matrix:
-        repo: [simple, mmaitre314/picklescan, huggingface/huggingface_hub, tiangolo/fastapi, encode/starlette, lancedb/lancedb, lancedb/lance, tkaitchuck/constrandom, jaemk/cached, smol-rs/async-executor, gcanti/io-ts, colinhacks/zod, helix-editor/helix]
+        repo:
+          - { name: simple, key: simple }
+          - { name: mmaitre314/picklescan, key: picklescan }
+          - { name: huggingface/huggingface_hub, key: huggingface_hub }
+          - { name: tiangolo/fastapi, key: fastap }
+          - { name: encode/starlette, key: starlette }
+          - { name: lancedb/lancedb, key: lancedb }
+          - { name: lancedb/lance, key: lance }
+          - { name: tkaitchuck/constrandom, key: constrandom }
+          - { name: jaemk/cached, key: cached }
+          - { name: smol-rs/async-executor, key: async-executor }
+          - { name: gcanti/io-ts, key: io-ts }
+          - { name: colinhacks/zod, key: zod }
+          - { name: helix-editor/helix, key: helix }
     runs-on: [self-hosted, intel-cpu, 8-cpu, ci]
     container:
       image: ubuntu:22.04
@@ -63,7 +76,7 @@ jobs:
         run: cargo build -r
 
       - name: Run testbed
-        run: 'cargo run --bin testbed -r -- --api-token $API_TOKEN -r `pwd`/crates/testbed/repositories-ci.yaml -f ${{ matrix.repo }}'
+        run: 'cargo run --bin testbed -r -- --api-token $API_TOKEN -r `pwd`/crates/testbed/repositories-ci.yaml -f ${{ matrix.repo.name }}'
         if: github.event_name == 'push' || github.event_name == 'pull_request'
         env:
           API_TOKEN: ${{ secrets.API_TOKEN }}
@@ -77,7 +90,7 @@ jobs:
       - name: Upload artifacts
         uses: actions/upload-artifact@v1
         with:
-          name: results-${{ matrix.repo }}
+          name: results-${{ matrix.repo.key }}
           path: ./results.json
 
   comment_results:
@@ -98,67 +111,62 @@ jobs:
 
       - uses: actions/download-artifact@v1
         with:
-          name: results-mmaitre314/picklescan
+          name: results-picklescan
           path: results-picklescan.json
 
       - uses: actions/download-artifact@v1
         with:
-          name: results-huggingface/huggingface_hub
+          name: results-huggingface_hub
           path: results-huggingface_hub.json
 
       - uses: actions/download-artifact@v1
         with:
-          name: results-tiangolo/fastapi
+          name: results-fastapi
           path: results-fastapi.json
 
       - uses: actions/download-artifact@v1
         with:
-          name: results-encode/starlette
+          name: results-starlette
           path: results-starlette.json
 
       - uses: actions/download-artifact@v1
         with:
-          name: results-lancedb/lancedb
+          name: results-lancedb
           path: results-lancedb.json
 
       - uses: actions/download-artifact@v1
         with:
-          name: results-lancedb/lancedb
-          path: results-lancedb.json
-
-      - uses: actions/download-artifact@v1
-        with:
-          name: results-lancedb/lance
+          name: results-lance
           path: results-lance.json
 
       - uses: actions/download-artifact@v1
         with:
-          name: results-tkaitchuck/constrandom
+          name: results-constrandom
           path: results-constrandom.json
 
       - uses: actions/download-artifact@v1
         with:
-          name: results-jaemk/cached
+          name: results-cached
           path: results-cached.json
 
       - uses: actions/download-artifact@v1
         with:
-          name: results-smol-rs/async-executor
+          name: results-async-executor
           path: results-async-executor.json
 
       - uses: actions/download-artifact@v1
         with:
-          name: results-gcanti/io-ts
+          name: results-io-ts
           path: results-io-ts
 
       - uses: actions/download-artifact@v1
         with:
-          name: results-colinhacks/zod
+          name: results-zod
           path: results-zod
 
       - uses: actions/download-artifact@v1
         with:
-          name: results-helix-editor/helix
+          name: results-helix
           path: results-helix.json
 
       - name: output to markdown
