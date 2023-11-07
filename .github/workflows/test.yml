@@ -81,6 +81,7 @@ jobs:
           path: ./results.json
 
   comment_results:
+    needs: [testbed]
     runs-on: [self-hosted, intel-cpu, 8-cpu, ci]
     container:
       image: ubuntu:22.04
