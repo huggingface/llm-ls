@@ -14,19 +14,19 @@ jobs:
     strategy:
       matrix:
         repo:
-          - { name: simple, key: simple }
-          - { name: mmaitre314/picklescan, key: picklescan }
-          - { name: huggingface/huggingface_hub, key: huggingface_hub }
-          - { name: tiangolo/fastapi, key: fastapi }
-          - { name: encode/starlette, key: starlette }
-          - { name: lancedb/lancedb, key: lancedb }
-          - { name: lancedb/lance, key: lance }
-          - { name: tkaitchuck/constrandom, key: constrandom }
-          - { name: jaemk/cached, key: cached }
-          - { name: smol-rs/async-executor, key: async-executor }
-          - { name: gcanti/io-ts, key: io-ts }
-          - { name: colinhacks/zod, key: zod }
-          - { name: helix-editor/helix, key: helix }
+          - { name: simple, key: simple, parallel: 8 }
+          - { name: mmaitre314/picklescan, key: picklescan, parallel: 8 }
+          - { name: huggingface/huggingface_hub, key: huggingface_hub, parallel: 8 }
+          - { name: tiangolo/fastapi, key: fastapi, parallel: 8 }
+          - { name: encode/starlette, key: starlette, parallel: 8 }
+          - { name: lancedb/lancedb, key: lancedb, parallel: 2 }
+          - { name: lancedb/lance, key: lance, parallel: 2 }
+          - { name: tkaitchuck/constrandom, key: constrandom, parallel: 8 }
+          - { name: jaemk/cached, key: cached, parallel: 4 }
+          - { name: smol-rs/async-executor, key: async-executor, parallel: 4 }
+          - { name: gcanti/io-ts, key: io-ts, parallel: 8 }
+          - { name: colinhacks/zod, key: zod, parallel: 8 }
+          - { name: helix-editor/helix, key: helix, parallel: 2 }
     runs-on: [self-hosted, intel-cpu, 8-cpu, ci]
     container:
       image: ubuntu:22.04
@@ -76,13 +76,13 @@ jobs:
         run: cargo build -r
 
       - name: Run testbed
-        run: 'cargo run --bin testbed -r -- --api-token $API_TOKEN -r `pwd`/crates/testbed/repositories-ci.yaml -f ${{ matrix.repo.name }}'
+        run: 'cargo run --bin testbed -r -- --api-token $API_TOKEN -r `pwd`/crates/testbed/repositories-ci.yaml -f ${{ matrix.repo.name }} -p ${{ matrix.repo.parallel }}'
         if: github.event_name == 'push' || github.event_name == 'pull_request'
         env:
           API_TOKEN: ${{ secrets.API_TOKEN }}
 
       - name: Run testbed
-        run: 'cargo run --bin testbed -r -- --api-token $API_TOKEN -f ${{ matrix.repo }}'
+        run: 'cargo run --bin testbed -r -- --api-token $API_TOKEN -f ${{ matrix.repo }} -p ${{ matrix.repo.parallel }}'
         if: github.event_name == 'workflow_dispatch'
         env:
           API_TOKEN: ${{ secrets.API_TOKEN }}
@@ -107,52 +107,52 @@ jobs:
       - uses: actions/download-artifact@v1
         with:
           name: results-simple
-          path: results-simple.json
+          path: results-simple
 
       - uses: actions/download-artifact@v1
         with:
           name: results-picklescan
-          path: results-picklescan.json
+          path: results-picklescan
 
       - uses: actions/download-artifact@v1
         with:
           name: results-huggingface_hub
-          path: results-huggingface_hub.json
+          path: results-huggingface_hub
 
       - uses: actions/download-artifact@v1
         with:
           name: results-fastapi
-          path: results-fastapi.json
+          path: results-fastapi
 
       - uses: actions/download-artifact@v1
         with:
           name: results-starlette
-          path: results-starlette.json
+          path: results-starlette
 
       - uses: actions/download-artifact@v1
         with:
           name: results-lancedb
-          path: results-lancedb.json
+          path: results-lancedb
 
       - uses: actions/download-artifact@v1
         with:
           name: results-lance
-          path: results-lance.json
+          path: results-lance
 
       - uses: actions/download-artifact@v1
         with:
           name: results-constrandom
-          path: results-constrandom.json
+          path: results-constrandom
 
       - uses: actions/download-artifact@v1
         with:
           name: results-cached
-          path: results-cached.json
+          path: results-cached
 
       - uses: actions/download-artifact@v1
         with:
           name: results-async-executor
-          path: results-async-executor.json
+          path: results-async-executor
 
       - uses: actions/download-artifact@v1
         with:
@@ -167,7 +167,10 @@ jobs:
       - uses: actions/download-artifact@v1
         with:
           name: results-helix
-          path: results-helix.json
+          path: results-helix
+
+      - name: Display structure of downloaded files
+        run: ls -R
 
       - name: output to markdown
         run: |
@@ -175,7 +178,7 @@ jobs:
           | Repository name | Source type | Average hole completion time (s) | Pass percentage |
           | :-------------- | :---------- | -------------------------------: | --------------: |
           EOF
-          cat results-*.json | jq -r '"| \(.[0].repo_name) | \(.[0].source_type) | \(.[0].avg_hole_completion_time_ms) | \(.[0].pass_percentage)% |"' >> results.md
+          cat **/results.json | jq -r '"| \(.[0].repo_name) | \(.[0].source_type) | \(.[0].avg_hole_completion_time_ms) | \(.[0].pass_percentage)% |"' >> results.md
           cat >> results.md <<EOF
           **Note:** The "hole completion time" represents the full process of:
             - copying files from the setup cache directory

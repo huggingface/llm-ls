@@ -75,6 +75,10 @@ struct Args {
     #[arg(short, long)]
     llm_ls_bin_path: Option<String>,
 
+    /// Concurrent hole completions number
+    #[arg(short, long, default_value_t = 8)]
+    parallel_hole_completions: usize,
+
     /// Path to the local repositories/ directory
     #[arg(short = 'R', long)]
     repos_dir_path: Option<String>,
@@ -651,7 +655,7 @@ async fn main() -> anyhow::Result<()> {
     let repositories = repos_config.repositories.clone();
     let setup_cache = Arc::new(SetupCache::new(&repositories));
     let mut handles = FuturesUnordered::new();
-    let semaphore = Arc::new(Semaphore::new(8));
+    let semaphore = Arc::new(Semaphore::new(args.parallel_hole_completions));
     for repo in repositories {
         if filter_repos && !filter_list.contains(&repo.name()) {
             continue;
