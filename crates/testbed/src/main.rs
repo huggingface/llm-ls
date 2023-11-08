@@ -724,14 +724,14 @@ async fn main() -> anyhow::Result<()> {
             let avg_hole_completion_time_ms = v.0 as f32 / v.2 / 1_000f32;
             let pass_percentage = v.1 / v.2 * 100f32;
             info!(
-                "{} from {} obtained {}% in {}s",
+                "{} from {} obtained {:.2}% in {:.3}s",
                 k.0, k.1, pass_percentage, avg_hole_completion_time_ms
             );
             serde_json::json!({
                 "repo_name": k.0,
                 "source_type": k.1,
-                "avg_hole_completion_time_ms": avg_hole_completion_time_ms,
-                "pass_percentage": pass_percentage,
+                "avg_hole_completion_time_ms": format!("{:.3}", avg_hole_completion_time_ms),
+                "pass_percentage": format!("{:.2}", pass_percentage),
             })
         })
         .collect::<Vec<serde_json::Value>>();
