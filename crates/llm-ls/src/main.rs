@@ -93,6 +93,7 @@ enum TokenizerConfig {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct RequestParams {
     max_new_tokens: u32,
     temperature: f32,
@@ -208,6 +209,7 @@ where
 }
 
 #[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct AcceptedCompletion {
     request_id: Uuid,
     accepted_completion: u32,
@@ -215,12 +217,14 @@ struct AcceptedCompletion {
 }
 
 #[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct RejectedCompletion {
     request_id: Uuid,
     shown_completions: Vec<u32>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct CompletionParams {
     #[serde(flatten)]
     text_document_position: TextDocumentPositionParams,
