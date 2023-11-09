@@ -3,7 +3,6 @@ use std::{path::Path, process::Stdio};
 use anyhow::anyhow;
 use serde::{Deserialize, Serialize};
 use tokio::{io::AsyncReadExt, process::Command};
-use tracing::debug;
 
 use crate::parse_env;
 
@@ -52,6 +51,7 @@ async fn pytest_runner(
         .ok_or(anyhow!("failed to take stdout"))?
         .read_to_string(&mut stdout)
         .await?;
+    child.wait().await?;
 
     // XXX: the pytest command can still fail even after the compilation check
     // the above check should prevent an error, but better safe than sorry
@@ -124,6 +124,7 @@ async fn cargo_runner(
         .ok_or(anyhow!("failed to take stdout"))?
         .read_to_string(&mut stdout)
         .await?;
+    child.wait().await?;
     let lines = stdout.split_terminator('\n');
     let mut passed = 0;
     let mut failed = 0;
@@ -173,6 +174,7 @@ async fn jest_runner(
         .ok_or(anyhow!("failed to take stderr"))?
         .read_to_string(&mut stderr)
         .await?;
+    child.wait().await?;
     let lines = stderr.split_terminator('\n');
     let mut passed = 0f32;
     let mut failed = 0f32;
@@ -228,6 +230,7 @@ async fn vitest_runner(
         .ok_or(anyhow!("failed to take stdout"))?
         .read_to_string(&mut stdout)
         .await?;
+    child.wait().await?;
     let lines = stdout.split_terminator('\n');
     let mut passed = 0f32;
     let mut failed = 0f32;
