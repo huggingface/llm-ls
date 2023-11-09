@@ -3,6 +3,7 @@ use std::{path::Path, process::Stdio};
 use anyhow::anyhow;
 use serde::{Deserialize, Serialize};
 use tokio::{io::AsyncReadExt, process::Command};
+use tracing::debug;
 
 use crate::parse_env;
 
@@ -185,7 +186,7 @@ async fn jest_runner(
             for word in words {
                 if word.contains("passed") {
                     passed = prev.parse::<u32>()? as f32;
-                } else if line.contains("failed") {
+                } else if word.contains("failed") {
                     failed = prev.parse::<u32>()? as f32;
                 }
                 prev = word;
@@ -241,7 +242,7 @@ async fn vitest_runner(
             for word in words {
                 if word.contains("passed") {
                     passed = prev.parse::<u32>()? as f32;
-                } else if line.contains("failed") {
+                } else if word.contains("failed") {
                     failed = prev.parse::<u32>()? as f32;
                 }
                 prev = word;
