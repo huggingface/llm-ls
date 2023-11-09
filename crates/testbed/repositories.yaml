@@ -7,10 +7,10 @@ fim:
   suffix: <fim_suffix>
 model: bigcode/starcoder
 request_params:
-  max_new_tokens: 150
+  maxNewTokens: 150
   temperature: 0.2
-  do_sample: true
-  top_p: 0.95
+  doSample: true
+  topP: 0.95
 tls_skip_verify_insecure: false
 tokenizer_config:
   repository: bigcode/starcoder

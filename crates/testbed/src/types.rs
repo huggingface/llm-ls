@@ -14,6 +14,7 @@ impl Request for GetCompletions {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub(crate) struct RequestParams {
     pub(crate) max_new_tokens: u32,
     pub(crate) temperature: f32,
@@ -60,6 +61,7 @@ pub(crate) enum TokenizerConfig {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub(crate) struct GetCompletionsParams {
     #[serde(flatten)]
     pub(crate) text_document_position: TextDocumentPositionParams,
