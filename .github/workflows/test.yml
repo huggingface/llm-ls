@@ -1,0 +1,91 @@
+name: test
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  testbed:
+    runs-on: [self-hosted, intel-cpu, 8-cpu, ci]
+    container:
+      image: ubuntu:22.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          apt update
+          DEBIAN_FRONTEND=noninteractive apt install -y pkg-config protobuf-compiler libssl-dev curl build-essential git-all gfortran
+
+      - name: Install Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          rustflags: ''
+          toolchain: nightly
+
+      - name: Install Python 3.10
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Install node 18
+        uses: actions/setup-node@v3
+        with:
+          node-version: 18
+
+      - name: Install yarn
+        run: |
+          npm i -g yarn
+
+      - name: Set up cargo cache
+        uses: actions/cache@v3
+        continue-on-error: false
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
+
+      - name: Build project
+        run: cargo build -r
+
+      - name: Run testbed
+        run: cargo run --bin testbed -r -- --api-token $API_TOKEN -r `pwd`/crates/testbed/repositories-ci.yaml
+        if: github.event_name == 'push' || github.event_name == 'pull_request'
+        env:
+          API_TOKEN: ${{ secrets.API_TOKEN }}
+
+      - name: Run testbed
+        run: cargo run --bin testbed -r -- --api-token $API_TOKEN
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          API_TOKEN: ${{ secrets.API_TOKEN }}
+
+      - name: Find Comment
+        uses: peter-evans/find-comment@v2
+        id: fc
+        if: github.event_name == 'pull_request'
+        with:
+          issue-number: ${{ github.event.pull_request.number }}
+          comment-author: 'github-actions[bot]'
+          body-includes: '| Repository name | Source type | Average hole completion time (s) | Pass percentage |'
+
+      - name: Create or update comment
+        if: github.event_name == 'pull_request'
+        uses: peter-evans/create-or-update-comment@v3
+        with:
+          comment-id: ${{ steps.fc.outputs.comment-id }}
+          issue-number: ${{ github.event.pull_request.number }}
+          body-path: results.md
+          edit-mode: replace
+
