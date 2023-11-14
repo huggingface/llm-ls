@@ -321,9 +321,9 @@ fn build_prompt(
             "{}{}{}{}{}",
             fim.prefix,
             before.into_iter().rev().collect::<Vec<_>>().join(""),
-            fim.suffix,
+            fim.middle,
             after,
-            fim.middle
+            fim.suffix
         );
         let time = t.elapsed().as_millis();
         info!(prompt, build_prompt_ms = time, "built prompt in {time} ms");
