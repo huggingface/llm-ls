@@ -454,7 +454,7 @@ async fn complete_holes(
                     .line(hole.cursor.line as usize)
                     .slice(hole.cursor.character as usize..)
                     .len_chars()
-                - 1;
+                - 1; // NOTE: -1 to preserve the trailing `\n`
             file_content.remove(hole_start..hole_end);
 
             let uri = Url::parse(&format!("file:/{file_path_str}"))?;
