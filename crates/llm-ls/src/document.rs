@@ -1,9 +1,11 @@
 use ropey::Rope;
 use tower_lsp::jsonrpc::Result;
-use tree_sitter::{Parser, Tree};
+use tower_lsp::lsp_types::Range;
+use tracing::info;
+use tree_sitter::{InputEdit, Parser, Point, Tree};
 
-use crate::internal_error;
 use crate::language_id::LanguageId;
+use crate::{get_position_idx, internal_error};
 
 fn get_parser(language_id: LanguageId) -> Result<Parser> {
     match language_id {
@@ -186,10 +188,85 @@ impl Document {
         })
     }
 
-    pub(crate) async fn change(&mut self, text: &str) -> Result<()> {
-        let rope = Rope::from_str(text);
-        self.tree = self.parser.parse(text, None);
-        self.text = rope;
+    pub(crate) async fn change(&mut self, range: Range, text: &str) -> Result<()> {
+        let start_idx = get_position_idx(
+            &self.text,
+            range.start.line as usize,
+            range.start.character as usize,
+        )?;
+        let start_byte = self
+            .text
+            .try_char_to_byte(start_idx)
+            .map_err(internal_error)?;
+        let old_end_idx = get_position_idx(
+            &self.text,
+            range.end.line as usize,
+            range.end.character as usize,
+        )?;
+        let old_end_byte = self
+            .text
+            .try_char_to_byte(old_end_idx)
+            .map_err(internal_error)?;
+        let start_position = Point {
+            row: range.start.line as usize,
+            column: range.start.character as usize,
+        };
+        let old_end_position = Point {
+            row: range.end.line as usize,
+            column: range.end.character as usize,
+        };
+        let (new_end_idx, new_end_position) = if range.start == range.end {
+            let row = range.start.line as usize;
+            let column = range.start.character as usize;
+            let idx = self.text.try_line_to_char(row).map_err(internal_error)? + column;
+            let rope = Rope::from_str(text);
+            let text_len = rope.len_chars();
+            let end_idx = idx + text_len;
+            self.text.insert(idx, text);
+            (
+                end_idx,
+                Point {
+                    row,
+                    column: column + text_len,
+                },
+            )
+        } else {
+            let slice_size = old_end_idx - start_idx;
+            self.text
+                .try_remove(start_idx..old_end_idx)
+                .map_err(internal_error)?;
+            self.text.insert(start_idx, text);
+            let rope = Rope::from_str(text);
+            let text_len = rope.len_chars();
+            let character_difference = text_len as isize - slice_size as isize;
+            let new_end_idx = if character_difference.is_negative() {
+                old_end_idx - character_difference.wrapping_abs() as usize
+            } else {
+                old_end_idx + character_difference as usize
+            };
+            let row = self
+                .text
+                .try_char_to_line(new_end_idx)
+                .map_err(internal_error)?;
+            let line_start = self.text.try_line_to_char(row).map_err(internal_error)?;
+            let column = new_end_idx - line_start;
+            (new_end_idx, Point { row, column })
+        };
+        if let Some(tree) = self.tree.as_mut() {
+            let edit = InputEdit {
+                start_byte,
+                old_end_byte,
+                new_end_byte: self
+                    .text
+                    .try_char_to_byte(new_end_idx)
+                    .map_err(internal_error)?,
+                start_position,
+                old_end_position,
+                new_end_position,
+            };
+            tree.edit(&edit);
+        }
+        self.tree = self.parser.parse(self.text.to_string(), self.tree.as_ref());
         Ok(())
     }
 }

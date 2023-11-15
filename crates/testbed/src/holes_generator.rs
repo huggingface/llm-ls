@@ -91,7 +91,7 @@ pub(crate) async fn generate_holes(
             if trimmed.starts_with(repo.language.comment_token()) || trimmed.is_empty() {
                 continue;
             }
-            let column_nb = rng.gen_range(0..15.min(line.len_chars()));
+            let column_nb = rng.gen_range(0..15.min(line.len_chars() - 1));
             holes.push(Hole::new(
                 line_nb as u32,
                 column_nb as u32,
