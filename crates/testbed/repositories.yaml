@@ -1,0 +1,248 @@
+---
+context_window: 2000
+fim:
+  enabled: true
+  prefix: <fim_prefix>
+  middle: <fim_middle>
+  suffix: <fim_suffix>
+model: bigcode/starcoder
+request_params:
+  maxNewTokens: 150
+  temperature: 0.2
+  doSample: true
+  topP: 0.95
+tls_skip_verify_insecure: false
+tokenizer_config:
+  repository: bigcode/starcoder
+tokens_to_clear: ["<|endoftext|>"]
+repositories:
+  - source:
+      type: local
+      path: simple
+      src_path: src
+    build_command: cargo
+    build_args: ["build"]
+    language: rust
+    runner: cargo
+    holes_file: simple.json
+  - source:
+      type: github
+      owner: mmaitre314
+      name: picklescan
+      revision: 40001cd1caa9e041b1bce1b80f3707056cd8be52
+      src_path: src/picklescan
+    build_command: picklescan-venv/bin/python3
+    build_args: ["-m", "compileall", "-q", "."]
+    language: python
+    runner: pytest
+    runner_command: picklescan-venv/bin/python3
+    setup_commands:
+      - ["python3", ["-m", "venv", "picklescan-venv"]]
+      - ["picklescan-venv/bin/python3", ["-m", "pip", "install", "."]]
+      - ["picklescan-venv/bin/python3", ["-m", "pip", "install", "-r", "requirements.txt"]]
+    holes_file: picklescan.json
+  - source:
+      type: github
+      owner: huggingface
+      name: huggingface_hub
+      revision: a48eb89d4186bc84bca67b117cf29a0ee0b69774
+      src_path: src/huggingface_hub
+    build_command: huggingface_hub-venv/bin/python3
+    build_args: ["-m", "compileall", "-q", "."]
+    language: python
+    runner: pytest
+    runner_command: huggingface_hub-venv/bin/python3
+    runner_extra_args:
+      - "-k"
+      - "_utils_ and not _utils_cache and not _utils_http and not paginate and not git"
+    setup_commands:
+      - ["python3", ["-m", "venv", "huggingface_hub-venv"]]
+      - ["huggingface_hub-venv/bin/python3", ["-m", "pip", "install", ".[dev]"]]
+    holes_file: huggingface_hub.json
+  - source:
+      type: github
+      owner: tiangolo
+      name: fastapi
+      revision: e4b21c6eab7cd58caf3c6c492ea1ce7945425dd1
+      src_path: fastapi
+    build_command: fastapi-venv/bin/python3
+    build_args: ["-m", "compileall", "-q", "."]
+    language: python
+    runner: pytest
+    runner_command: fastapi-venv/bin/python3
+    setup_commands:
+      - ["python3", ["-m", "venv", "fastapi-venv"]]
+      - ["fastapi-venv/bin/python3", ["-m", "pip", "install", "--upgrade", "pip"]]
+      - ["fastapi-venv/bin/python3", ["-m", "pip", "install", "-r", "requirements-tests.txt"]]
+      - ["fastapi-venv/bin/python3", ["-m", "pip", "install", "pydantic"]]
+    holes_file: fastapi.json
+  - source:
+      type: github
+      owner: encode
+      name: starlette
+      revision: 657e7e7b728e13dc66cc3f77dffd00a42545e171
+      src_path: starlette
+    build_command: starlette-venv/bin/python3
+    build_args: ["-m", "compileall", "-q", "."]
+    language: python
+    runner: pytest
+    runner_command: starlette-venv/bin/python3
+    setup_commands:
+      - ["python3", ["-m", "venv", "starlette-venv"]]
+      - ["starlette-venv/bin/python3", ["-m", "pip", "install", "--upgrade", "pip"]]
+      - ["starlette-venv/bin/python3", ["-m", "pip", "install", "-r", "requirements.txt"]]
+    holes_file: starlette.json
+  - source:
+      type: github
+      owner: lancedb
+      name: lancedb
+      revision: 682e95fa8388d5839c8a782063beb307c4fca4bc
+      src_path: rust/vectordb/src
+    build_command: cargo
+    build_args: ["build"]
+    language: rust
+    runner: cargo
+    # this is to avoid skewing the average hole completion time
+    setup_commands:
+      - ["cargo", ["build"]]
+    holes_file: lancedb.json
+  - source:
+      type: github
+      owner: lancedb
+      name: lance
+      revision: c8ee16ec31eeca884c78bd4a400404aaa994ed46
+      src_path: rust
+      exclude_paths:
+        - .cargo
+        - .vscode
+        - .gitignore
+        - README.md
+        - img.png
+    build_command: cargo
+    build_args: ["build", "--all-features", "--manifest-path", "rust/Cargo.toml"]
+    language: rust
+    runner: cargo
+    runner_extra_args: ["--all-features", "--manifest-path", "rust/Cargo.toml"]
+    setup_commands:
+      - ["rm", ["rust/lance-core/protos", "rust/lance-index/protos"]]
+      - ["ln", ["-s", "../../protos", "rust/lance-core/protos"]]
+      - ["ln", ["-s", "../../protos", "rust/lance-index/protos"]]
+      - ["cargo", ["build", "--all-features", "--manifest-path", "rust/Cargo.toml"]]
+    holes_file: lance.json
+  - source:
+      type: github
+      owner: tkaitchuck
+      name: constrandom
+      revision: e9f560ba14e09ff9db9caca3f2dfa3ff52cc96de
+      src_path: src
+    build_command: cargo
+    build_args: ["build"]
+    language: rust
+    runner: cargo
+    setup_commands:
+      - ["cargo", ["build"]]
+    holes_file: constrandom.json
+  - source:
+      type: github
+      owner: jaemk
+      name: cached
+      revision: b1015561fb121c3e5698183c39df202e5a83994a
+      src_path: src
+    build_command: cargo
+    build_args: ["build"]
+    language: rust
+    runner: cargo
+    setup_commands:
+      - ["cargo", ["build"]]
+    holes_file: cached.json
+  - source:
+      type: github
+      owner: smol-rs
+      name: async-executor
+      revision: b91875e73bd9aec582e099d8c792514381fc8d0f
+      src_path: src
+    build_command: cargo
+    build_args: ["build"]
+    language: rust
+    runner: cargo
+    setup_commands:
+      - ["cargo", ["build"]]
+    holes_file: async-executor.json
+  - source:
+      type: github
+      owner: gcanti
+      name: io-ts
+      revision: 616583de0198632cad7820ed8701b15f654c7fd2
+      src_path: src
+    build_command: npm
+    build_args: ["run", "build"]
+    language: typescript
+    runner: vitest
+    runner_args: ["run", "vitest", "--", "--no-color"]
+    setup_commands:
+      - ["npm", ["install"]]
+    holes_file: io-ts.json
+  - source:
+      type: github
+      owner: colinhacks
+      name: zod
+      revision: 481c9ba1932203777f6fe9497bb2a8a1d33c620e
+      src_path: src
+      exclude_paths: ["src/__tests__"]
+    build_command: yarn
+    build_args: ["build"]
+    language: typescript
+    runner: jest
+    runner_command: yarn
+    runner_args: ["test", "--", "--no-colors"]
+    setup_commands:
+      - ["yarn", ["install"]]
+    holes_file: zod.json
+  - source:
+      type: github
+      owner: helix-editor
+      name: helix
+      revision: ae6a0a9cfd377fbfa494760282498cf2ca322782
+      exclude_paths:
+        - .cargo
+        - .github
+        - book
+        - contrib
+        - docs
+        - helix-core/tests
+        - helix-term/tests
+        - helix-tui/tests
+        - helix-view/tests
+        - runtime
+        - xtask
+        - .envrc
+        - .gitattributes
+        - .gitignore
+        - .ignore
+        - CHANGELOG.md
+        - Cargo.lock
+        - LICENSE
+        - README.md
+        - VERSION
+        - base16_theme.toml
+        - default.nix
+        - flake.lock
+        - flake.nix
+        - grammars.nix
+        - languages.toml
+        - logo.svg
+        - logo_dark.svg
+        - logo_light.svg
+        - rust-toolchain.toml
+        - rustfmt.toml
+        - screenshot.png
+        - shell.nix
+        - theme.toml
+    build_command: cargo
+    build_args: ["build"]
+    language: rust
+    runner: cargo
+    runner_extra_args: ["--workspace"]
+    setup_commands:
+      - ["cargo", ["build"]]
+    holes_file: helix.json

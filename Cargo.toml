@@ -1,16 +1,17 @@
 [workspace]
 members = ["xtask/", "crates/*"]
 resolver = "2"
+exclude = ["crates/testbed/repositories/*"]
 
 [workspace.package]
 edition = "2021"
 license = "Apache-2.0"
 authors = ["Luc Georges <luc@huggingface.co>"]
 
-[profile.dev]
+# [profile.dev]
 # Disabling debug info speeds up builds a bunch,
 # and we don't rely on it for debugging that much.
-debug = 0
+# debug = 0
 
 [profile.dev.package]
 # This speeds up `cargo xtask dist`.

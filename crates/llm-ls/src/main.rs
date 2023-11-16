@@ -25,6 +25,16 @@ const MAX_WARNING_REPEAT: Duration = Duration::from_secs(3_600);
 const NAME: &str = "llm-ls";
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
+fn get_position_idx(rope: &Rope, row: usize, col: usize) -> Result<usize> {
+    Ok(rope.try_line_to_char(row).map_err(internal_error)?
+        + col.min(
+            rope.get_line(row.min(rope.len_lines() - 1))
+                .ok_or_else(|| internal_error(format!("failed to find line at {row}")))?
+                .len_chars()
+                - 1,
+        ))
+}
+
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
 enum CompletionType {
     Empty,
@@ -42,45 +52,71 @@ impl Display for CompletionType {
     }
 }
 
-fn should_complete(document: &Document, position: Position) -> CompletionType {
+fn should_complete(document: &Document, position: Position) -> Result<CompletionType> {
     let row = position.line as usize;
     let column = position.character as usize;
     if let Some(tree) = &document.tree {
         let current_node = tree.root_node().descendant_for_point_range(
             tree_sitter::Point { row, column },
-            tree_sitter::Point { row, column },
+            tree_sitter::Point {
+                row,
+                column: column + 1,
+            },
         );
         if let Some(node) = current_node {
             if node == tree.root_node() {
-                return CompletionType::MultiLine;
+                return Ok(CompletionType::MultiLine);
             }
             let start = node.start_position();
             let end = node.end_position();
-            let mut start_offset = document.text.line_to_char(start.row) + start.column;
-            let mut end_offset = document.text.line_to_char(end.row) + end.column - 1;
-            let start_char = document.text.char(start_offset);
+            let mut start_offset = get_position_idx(&document.text, start.row, start.column)?;
+            let mut end_offset = get_position_idx(&document.text, end.row, end.column)? - 1;
+            let start_char = document
+                .text
+                .get_char(start_offset.min(document.text.len_chars() - 1))
+                .ok_or_else(|| {
+                    internal_error(format!("failed to find start char at {start_offset}"))
+                })?;
+            let end_char = document
+                .text
+                .get_char(end_offset.min(document.text.len_chars() - 1))
+                .ok_or_else(|| {
+                    internal_error(format!("failed to find end char at {end_offset}"))
+                })?;
             if !start_char.is_whitespace() {
                 start_offset += 1;
             }
-            let end_char = document.text.char(end_offset);
             if !end_char.is_whitespace() {
                 end_offset -= 1;
             }
             if start_offset >= end_offset {
-                return CompletionType::SingleLine;
+                return Ok(CompletionType::SingleLine);
             }
-            let slice = document.text.slice(start_offset..end_offset);
+            let slice = document
+                .text
+                .get_slice(start_offset..end_offset)
+                .ok_or_else(|| {
+                    internal_error(format!(
+                        "failed to find slice at {start_offset}..{end_offset}"
+                    ))
+                })?;
             if slice.to_string().trim().is_empty() {
-                return CompletionType::MultiLine;
+                return Ok(CompletionType::MultiLine);
             }
         }
     }
-    let start_idx = document.text.line_to_char(row);
-    let next_char = document.text.char(start_idx + column);
+    let start_idx = document
+        .text
+        .try_line_to_char(row)
+        .map_err(internal_error)?;
+    let next_char = document
+        .text
+        .get_char(start_idx + column)
+        .ok_or_else(|| internal_error(format!("failed to find char at {}", start_idx + column)))?;
     if next_char.is_whitespace() {
-        CompletionType::SingleLine
+        Ok(CompletionType::SingleLine)
     } else {
-        CompletionType::Empty
+        Ok(CompletionType::Empty)
     }
 }
 
@@ -93,6 +129,7 @@ enum TokenizerConfig {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct RequestParams {
     max_new_tokens: u32,
     temperature: f32,
@@ -208,6 +245,7 @@ where
 }
 
 #[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct AcceptedCompletion {
     request_id: Uuid,
     accepted_completion: u32,
@@ -215,12 +253,14 @@ struct AcceptedCompletion {
 }
 
 #[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct RejectedCompletion {
     request_id: Uuid,
     shown_completions: Vec<u32>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct CompletionParams {
     #[serde(flatten)]
     text_document_position: TextDocumentPositionParams,
@@ -269,12 +309,12 @@ fn build_prompt(
         let mut after_iter = text.lines_at(pos.line as usize);
         let mut before_line = before_iter.next();
         if let Some(line) = before_line {
-            let col = (pos.character as usize).clamp(0, line.len_chars());
+            let col = (pos.character as usize).clamp(0, line.len_chars() - 1);
             before_line = Some(line.slice(0..col));
         }
         let mut after_line = after_iter.next();
         if let Some(line) = after_line {
-            let col = (pos.character as usize).clamp(0, line.len_chars());
+            let col = (pos.character as usize).clamp(0, line.len_chars() - 1);
             after_line = Some(line.slice(col..));
         }
         let mut before = vec![];
@@ -332,7 +372,7 @@ fn build_prompt(
         let mut first = true;
         for mut line in text.lines_at(pos.line as usize + 1).reversed() {
             if first {
-                let col = (pos.character as usize).clamp(0, line.len_chars());
+                let col = (pos.character as usize).clamp(0, line.len_chars() - 1);
                 line = line.slice(0..col);
                 first = false;
             }
@@ -593,7 +633,7 @@ impl Backend {
                     *unauthenticated_warn_at = Instant::now();
                 }
             }
-            let completion_type = should_complete(document, params.text_document_position.position);
+            let completion_type = should_complete(document, params.text_document_position.position)?;
             info!(%completion_type, "completion type: {completion_type:?}");
             if completion_type == CompletionType::Empty {
                 return Ok(CompletionResult { request_id, completions: vec![]});
@@ -668,7 +708,7 @@ impl LanguageServer for Backend {
             }),
             capabilities: ServerCapabilities {
                 text_document_sync: Some(TextDocumentSyncCapability::Kind(
-                    TextDocumentSyncKind::FULL,
+                    TextDocumentSyncKind::INCREMENTAL,
                 )),
                 ..Default::default()
             },
@@ -677,7 +717,7 @@ impl LanguageServer for Backend {
 
     async fn initialized(&self, _: InitializedParams) {
         self.client
-            .log_message(MessageType::INFO, "{llm-ls} initialized")
+            .log_message(MessageType::INFO, "llm-ls initialized")
             .await;
         info!("initialized language server");
     }
@@ -700,21 +740,27 @@ impl LanguageServer for Backend {
             Err(err) => error!("error opening {uri}: {err}"),
         }
         self.client
-            .log_message(MessageType::INFO, "{llm-ls} file opened")
+            .log_message(MessageType::INFO, format!("{uri} opened"))
             .await;
     }
 
     async fn did_change(&self, params: DidChangeTextDocumentParams) {
-        self.client
-            .log_message(MessageType::INFO, "{llm-ls} file changed")
-            .await;
         let uri = params.text_document.uri.to_string();
+        self.client
+            .log_message(MessageType::INFO, format!("{uri} changed"))
+            .await;
         let mut document_map = self.document_map.write().await;
         let doc = document_map.get_mut(&uri);
         if let Some(doc) = doc {
-            match doc.change(&params.content_changes[0].text).await {
-                Ok(()) => info!("{uri} changed"),
-                Err(err) => error!("error when changing {uri}: {err}"),
+            for change in &params.content_changes {
+                if let Some(range) = change.range {
+                    match doc.change(range, &change.text).await {
+                        Ok(()) => info!("{uri} changed"),
+                        Err(err) => error!("error when changing {uri}: {err}"),
+                    }
+                } else {
+                    warn!("Could not update document, got change request with missing range");
+                }
             }
         } else {
             warn!("textDocument/didChange {uri}: document not found");
@@ -722,20 +768,20 @@ impl LanguageServer for Backend {
     }
 
     async fn did_save(&self, params: DidSaveTextDocumentParams) {
-        self.client
-            .log_message(MessageType::INFO, "{llm-ls} file saved")
-            .await;
         let uri = params.text_document.uri.to_string();
+        self.client
+            .log_message(MessageType::INFO, format!("{uri} saved"))
+            .await;
         info!("{uri} saved");
     }
 
     // TODO:
     // textDocument/didClose
     async fn did_close(&self, params: DidCloseTextDocumentParams) {
-        self.client
-            .log_message(MessageType::INFO, "{llm-ls} file closed")
-            .await;
         let uri = params.text_document.uri.to_string();
+        self.client
+            .log_message(MessageType::INFO, format!("{uri} closed"))
+            .await;
         info!("{uri} closed");
     }
 
