@@ -1,3 +1,4 @@
+use adaptors::Adaptors;
 use document::Document;
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, USER_AGENT};
 use ropey::Rope;
@@ -18,12 +19,13 @@ use tracing_appender::rolling;
 use tracing_subscriber::EnvFilter;
 use uuid::Uuid;
 
+mod adaptors;
 mod document;
 mod language_id;
 
 const MAX_WARNING_REPEAT: Duration = Duration::from_secs(3_600);
-const NAME: &str = "llm-ls";
-const VERSION: &str = env!("CARGO_PKG_VERSION");
+pub const NAME: &str = "llm-ls";
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 fn get_position_idx(rope: &Rope, row: usize, col: usize) -> Result<usize> {
     Ok(rope.try_line_to_char(row).map_err(internal_error)?
@@ -178,12 +180,12 @@ struct APIRequest {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-struct Generation {
+pub struct Generation {
     generated_text: String,
 }
 
 #[derive(Debug, Deserialize)]
-struct APIError {
+pub struct APIError {
     error: String,
 }
 
@@ -195,7 +197,7 @@ impl Display for APIError {
 
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
-enum APIResponse {
+pub enum APIResponse {
     Generation(Generation),
     Generations(Vec<Generation>),
     Error(APIError),
@@ -219,7 +221,7 @@ struct Completion {
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
-enum Ide {
+pub enum Ide {
     Neovim,
     VSCode,
     JetBrains,
@@ -261,7 +263,7 @@ struct RejectedCompletion {
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct CompletionParams {
+pub struct CompletionParams {
     #[serde(flatten)]
     text_document_position: TextDocumentPositionParams,
     request_params: RequestParams,
@@ -271,12 +273,12 @@ struct CompletionParams {
     fim: FimParams,
     api_token: Option<String>,
     model: String,
+    adaptor: Option<String>,
     tokens_to_clear: Vec<String>,
     tokenizer_config: Option<TokenizerConfig>,
     context_window: usize,
     tls_skip_verify_insecure: bool,
-    request_body: Option<HashMap<String, serde_json::Value>>,
-    inputs_key: Option<String>,
+    request_body: Option<serde_json::Map<String, serde_json::Value>>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -285,7 +287,7 @@ struct CompletionResult {
     completions: Vec<Completion>,
 }
 
-fn internal_error<E: Display>(err: E) -> Error {
+pub fn internal_error<E: Display>(err: E) -> Error {
     let err_msg = err.to_string();
     error!(err_msg);
     Error {
@@ -404,38 +406,22 @@ async fn request_completion(
     params: CompletionParams,
 ) -> Result<Vec<Generation>> {
     let t = Instant::now();
-    let CompletionParams {
-        model,
-        request_body,
-        inputs_key,
-        request_params,
-        api_token,
-        ide,
-        ..
-    } = params;
-    let mut body: HashMap<String, serde_json::Value> = HashMap::new();
-    body.extend(request_body.unwrap_or_default());
-    body.insert(
-        inputs_key.unwrap_or("input".to_string()),
-        serde_json::Value::String(prompt),
-    );
-    body.insert(
-        "parameters".to_string(),
-        serde_json::to_value(request_params).expect("Failed to serialize request_params"),
-    );
+    let model = params.model.clone();
+    let adaptor = params.adaptor.clone();
+    let api_token = params.api_token.clone();
+    let ide = params.ide.clone();
+
+    let json = Adaptors.adapt_body(prompt, params);
+    let headers = Adaptors.adapt_headers(adaptor.clone(), api_token.as_ref(), ide)?;
     let res = http_client
         .post(build_url(&model))
-        .json(&body)
-        .headers(build_headers(api_token.as_ref(), ide)?)
+        .json(&json)
+        .headers(headers)
         .send()
         .await
         .map_err(internal_error)?;
 
-    let generations = match res.json().await.map_err(internal_error)? {
-        APIResponse::Generation(gen) => vec![gen],
-        APIResponse::Generations(gens) => gens,
-        APIResponse::Error(err) => return Err(internal_error(err)),
-    };
+    let generations = Adaptors.adapt_blob(adaptor, res.text().await);
     let time = t.elapsed().as_millis();
     info!(
         model,
@@ -443,7 +429,7 @@ async fn request_completion(
         generations = serde_json::to_string(&generations).map_err(internal_error)?,
         "{model} computed generations in {time} ms"
     );
-    Ok(generations)
+    generations
 }
 
 fn parse_generations(
