@@ -1,4 +1,4 @@
-use adaptors::Adaptors;
+use adaptors::{adapt_body, adapt_headers, adapt_text};
 use document::Document;
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, USER_AGENT};
 use ropey::Rope;
@@ -409,10 +409,10 @@ async fn request_completion(
     let model = params.model.clone();
     let adaptor = params.adaptor.clone();
     let api_token = params.api_token.clone();
-    let ide = params.ide.clone();
+    let ide = params.ide;
 
-    let json = Adaptors.adapt_body(prompt, params);
-    let headers = Adaptors.adapt_headers(adaptor.clone(), api_token.as_ref(), ide)?;
+    let json = adapt_body(prompt, params);
+    let headers = adapt_headers(adaptor.clone(), api_token.as_ref(), ide)?;
     let res = http_client
         .post(build_url(&model))
         .json(&json)
@@ -421,7 +421,7 @@ async fn request_completion(
         .await
         .map_err(internal_error)?;
 
-    let generations = Adaptors.adapt_blob(adaptor, res.text().await);
+    let generations = adapt_text(adaptor, res.text().await);
     let time = t.elapsed().as_millis();
     info!(
         model,
