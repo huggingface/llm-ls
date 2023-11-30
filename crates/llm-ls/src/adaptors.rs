@@ -1,7 +1,6 @@
-use crate::RequestParams;
-
 use super::{
-    internal_error, APIError, APIResponse, CompletionParams, Generation, Ide, NAME, VERSION,
+    internal_error, APIError, APIResponse, CompletionParams, Generation, Ide, RequestParams, NAME,
+    VERSION,
 };
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, USER_AGENT};
 use serde::{Deserialize, Serialize};

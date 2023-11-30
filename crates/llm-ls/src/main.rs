@@ -122,7 +122,7 @@ fn should_complete(document: &Document, position: Position) -> Result<Completion
     }
 }
 
-#[derive(Debug, Deserialize, Serialize, Clone)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(untagged)]
 enum TokenizerConfig {
     Local { path: PathBuf },
@@ -132,7 +132,7 @@ enum TokenizerConfig {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct RequestParams {
+pub struct RequestParams {
     max_new_tokens: u32,
     temperature: f32,
     do_sample: bool,
