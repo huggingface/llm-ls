@@ -1,4 +1,4 @@
-use adaptors::{adapt_body, adapt_headers, adapt_text};
+use adaptors::{adapt_body, adapt_headers, parse_generations};
 use document::Document;
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, USER_AGENT};
 use ropey::Rope;
@@ -403,25 +403,29 @@ fn build_prompt(
 async fn request_completion(
     http_client: &reqwest::Client,
     prompt: String,
-    params: CompletionParams,
+    params: &CompletionParams,
 ) -> Result<Vec<Generation>> {
     let t = Instant::now();
-    let model = params.model.clone();
-    let adaptor = params.adaptor.clone();
-    let api_token = params.api_token.clone();
-    let ide = params.ide;
 
     let json = adapt_body(prompt, params);
-    let headers = adapt_headers(adaptor.clone(), api_token.as_ref(), ide)?;
+    let headers = adapt_headers(
+        params.adaptor.as_ref(),
+        params.api_token.as_ref(),
+        params.ide,
+    )?;
     let res = http_client
-        .post(build_url(&model))
+        .post(build_url(&params.model))
         .json(&json)
         .headers(headers)
         .send()
         .await
         .map_err(internal_error)?;
 
-    let generations = adapt_text(adaptor, res.text().await);
+    let model = &params.model;
+    let generations = parse_generations(
+        params.adaptor.as_ref(),
+        res.text().await.unwrap_or(String::new()).as_str(),
+    );
     let time = t.elapsed().as_millis();
     info!(
         model,
@@ -432,7 +436,7 @@ async fn request_completion(
     generations
 }
 
-fn parse_generations(
+fn format_generations(
     generations: Vec<Generation>,
     tokens_to_clear: &[String],
     completion_type: CompletionType,
@@ -525,7 +529,7 @@ async fn download_tokenizer_file(
 async fn get_tokenizer(
     model: &str,
     tokenizer_map: &mut HashMap<String, Arc<Tokenizer>>,
-    tokenizer_config: Option<TokenizerConfig>,
+    tokenizer_config: Option<&TokenizerConfig>,
     http_client: &reqwest::Client,
     cache_dir: impl AsRef<Path>,
     api_token: Option<&String>,
@@ -557,7 +561,7 @@ async fn get_tokenizer(
                 }
             }
             TokenizerConfig::Download { url, to } => {
-                download_tokenizer_file(http_client, &url, api_token, &to, ide).await?;
+                download_tokenizer_file(http_client, url, api_token, &to, ide).await?;
                 match Tokenizer::from_file(to) {
                     Ok(tokenizer) => Some(Arc::new(tokenizer)),
                     Err(err) => {
@@ -625,11 +629,10 @@ impl Backend {
                 return Ok(CompletionResult { request_id, completions: vec![]});
             }
 
-            let tokenizer_config = params.tokenizer_config.clone();
             let tokenizer = get_tokenizer(
                 &params.model,
                 &mut *self.tokenizer_map.write().await,
-                tokenizer_config,
+                params.tokenizer_config.as_ref(),
                 &self.http_client,
                 &self.cache_dir,
                 params.api_token.as_ref(),
@@ -650,15 +653,14 @@ impl Backend {
             } else {
                 &self.http_client
             };
-            let tokens_to_clear = params.tokens_to_clear.clone();
             let result = request_completion(
                 http_client,
                 prompt,
-                params,
+                &params,
             )
             .await?;
 
-            let completions = parse_generations(result, &tokens_to_clear, completion_type);
+            let completions = format_generations(result, &params.tokens_to_clear, completion_type);
             Ok(CompletionResult { request_id, completions })
         }.instrument(span).await
     }
