@@ -8,7 +8,10 @@ name = "llm-ls"
 
 [dependencies]
 home = "0.5"
-ropey = "1.6"
+ropey = { version = "1.6", default-features = false, features = [
+  "simd",
+  "cr_lines",
+] }
 reqwest = { version = "0.11", default-features = false, features = [
   "json",
   "rustls-tls",
