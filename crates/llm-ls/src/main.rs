@@ -424,7 +424,7 @@ async fn request_completion(
     let model = &params.model;
     let generations = parse_generations(
         params.adaptor.as_ref(),
-        res.text().await.unwrap_or(String::new()).as_str(),
+        res.text().await.map_err(internal_error)?.as_str(),
     );
     let time = t.elapsed().as_millis();
     info!(
