@@ -69,6 +69,13 @@ fn build_ollama_body(prompt: String, params: &CompletionParams) -> Value {
         "prompt": prompt,
         "model": params.request_body.as_ref().unwrap().get("model"),
         "stream": false,
+        // As per [modelfile](https://github.com/jmorganca/ollama/blob/main/docs/modelfile.md#valid-parameters-and-values)
+        "options": {
+            "num_predict": params.request_params.max_new_tokens,
+            "temperature": params.request_params.temperature,
+            "top_p": params.request_params.top_p,
+            "stop": params.request_params.stop_tokens.clone(),
+        }
     })
 }
 fn build_ollama_headers() -> Result<HeaderMap, jsonrpc::Error> {
