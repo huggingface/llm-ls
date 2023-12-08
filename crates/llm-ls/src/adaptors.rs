@@ -113,7 +113,7 @@ fn parse_ollama_text(text: &str) -> Result<Vec<Generation>, jsonrpc::Error> {
 fn build_openai_body(prompt: String, params: &CompletionParams) -> Value {
     serde_json::json!({
         "prompt": prompt,
-        "model": params.model,
+        "model": params.request_body.as_ref().unwrap().get("model"),
         "max_tokens": params.request_params.max_new_tokens,
         "temperature": params.request_params.temperature,
         "top_p": params.request_params.top_p,
