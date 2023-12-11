@@ -62,6 +62,10 @@ fn build_api_headers(api_token: Option<&String>, ide: Ide) -> Result<HeaderMap, 
 }
 
 fn parse_api_text(text: &str) -> Result<Vec<Generation>, jsonrpc::Error> {
+    // TODO:
+    // APIResponse::Generation(gen) => Ok(vec![gen]),
+    // APIResponse::Generations(gens) => Ok(gens),
+    // APIResponse::Error(err) => Err(err),
     let generations = match serde_json::from_str(text).map_err(internal_error)? {
         APIResponse::Generation(gen) => vec![gen],
         APIResponse::Generations(gens) => gens,

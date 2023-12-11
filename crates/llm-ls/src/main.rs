@@ -1,6 +1,8 @@
 use adaptors::{adapt_body, adapt_headers, parse_generations};
 use document::Document;
+use error::{Error, Result};
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, USER_AGENT};
+use retrieval::SnippetRetriever;
 use ropey::Rope;
 use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::HashMap;
@@ -10,8 +12,10 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokenizers::Tokenizer;
 use tokio::io::AsyncWriteExt;
-use tokio::sync::RwLock;
-use tower_lsp::jsonrpc::{Error, Result};
+use tokio::sync::{mpsc, RwLock};
+use tower_lsp::jsonrpc::Result as LspResult;
+use tower_lsp::lsp_types::notification::Progress;
+use tower_lsp::lsp_types::request::WorkDoneProgressCreate;
 use tower_lsp::lsp_types::*;
 use tower_lsp::{Client, LanguageServer, LspService, Server};
 use tracing::{debug, error, info, info_span, warn, Instrument};
@@ -19,8 +23,11 @@ use tracing_appender::rolling;
 use tracing_subscriber::EnvFilter;
 use uuid::Uuid;
 
+use crate::error::internal_error;
+
 mod adaptors;
 mod document;
+mod error;
 mod language_id;
 mod retrieval;
 
@@ -30,10 +37,10 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 const HF_INFERENCE_API_HOSTNAME: &str = "api-inference.huggingface.co";
 
 fn get_position_idx(rope: &Rope, row: usize, col: usize) -> Result<usize> {
-    Ok(rope.try_line_to_char(row).map_err(internal_error)?
+    Ok(rope.try_line_to_char(row)?
         + col.min(
             rope.get_line(row.min(rope.len_lines().saturating_sub(1)))
-                .ok_or_else(|| internal_error(format!("failed to find line at {row}")))?
+                .ok_or(Error::OutOfBoundLine(row))?
                 .len_chars()
                 .saturating_sub(1),
         ))
@@ -82,15 +89,11 @@ fn should_complete(document: &Document, position: Position) -> Result<Completion
             let start_char = document
                 .text
                 .get_char(start_offset.min(document.text.len_chars() - 1))
-                .ok_or_else(|| {
-                    internal_error(format!("failed to find start char at {start_offset}"))
-                })?;
+                .ok_or(Error::OutOfBoundIndexing(start_offset))?;
             let end_char = document
                 .text
                 .get_char(end_offset.min(document.text.len_chars() - 1))
-                .ok_or_else(|| {
-                    internal_error(format!("failed to find end char at {end_offset}"))
-                })?;
+                .ok_or(Error::OutOfBoundIndexing(end_offset))?;
             if !start_char.is_whitespace() {
                 start_offset += 1;
             }
@@ -103,25 +106,15 @@ fn should_complete(document: &Document, position: Position) -> Result<Completion
             let slice = document
                 .text
                 .get_slice(start_offset..end_offset)
-                .ok_or_else(|| {
-                    internal_error(format!(
-                        "failed to find slice at {start_offset}..{end_offset}"
-                    ))
-                })?;
+                .ok_or(Error::OutOfBoundSlice(start_offset, end_offset))?;
             if slice.to_string().trim().is_empty() {
                 return Ok(CompletionType::MultiLine);
             }
         }
     }
-    let start_idx = document
-        .text
-        .try_line_to_char(row)
-        .map_err(internal_error)?;
+    let start_idx = document.text.try_line_to_char(row)?;
     // XXX: We treat the end of a document as a newline
-    let next_char = document
-        .text
-        .get_char(start_idx + column)
-        .unwrap_or('\n');
+    let next_char = document.text.get_char(start_idx + column).unwrap_or('\n');
     if next_char.is_whitespace() {
         Ok(CompletionType::SingleLine)
     } else {
@@ -196,6 +189,12 @@ pub struct APIError {
     error: String,
 }
 
+impl std::error::Error for APIError {
+    fn description(&self) -> &str {
+        &self.error
+    }
+}
+
 impl Display for APIError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.error)
@@ -219,6 +218,10 @@ struct Backend {
     workspace_folders: Arc<RwLock<Option<Vec<WorkspaceFolder>>>>,
     tokenizer_map: Arc<RwLock<HashMap<String, Arc<Tokenizer>>>>,
     unauthenticated_warn_at: Arc<RwLock<Instant>>,
+    snippet_retriever: Arc<RwLock<SnippetRetriever>>,
+    supports_progress_bar: Arc<RwLock<bool>>,
+    cancel_snippet_build_tx: mpsc::Sender<()>,
+    cancel_snippet_build_rx: Arc<RwLock<mpsc::Receiver<()>>>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -294,16 +297,6 @@ struct CompletionResult {
     completions: Vec<Completion>,
 }
 
-pub fn internal_error<E: Display>(err: E) -> Error {
-    let err_msg = err.to_string();
-    error!(err_msg);
-    Error {
-        code: tower_lsp::jsonrpc::ErrorCode::InternalError,
-        message: err_msg.into(),
-        data: None,
-    }
-}
-
 fn build_prompt(
     pos: Position,
     text: &Rope,
@@ -332,10 +325,7 @@ fn build_prompt(
             if let Some(before_line) = before_line {
                 let before_line = before_line.to_string();
                 let tokens = if let Some(tokenizer) = tokenizer.clone() {
-                    tokenizer
-                        .encode(before_line.clone(), false)
-                        .map_err(internal_error)?
-                        .len()
+                    tokenizer.encode(before_line.clone(), false)?.len()
                 } else {
                     before_line.len()
                 };
@@ -348,10 +338,7 @@ fn build_prompt(
             if let Some(after_line) = after_line {
                 let after_line = after_line.to_string();
                 let tokens = if let Some(tokenizer) = tokenizer.clone() {
-                    tokenizer
-                        .encode(after_line.clone(), false)
-                        .map_err(internal_error)?
-                        .len()
+                    tokenizer.encode(after_line.clone(), false)?.len()
                 } else {
                     after_line.len()
                 };
@@ -387,10 +374,7 @@ fn build_prompt(
             }
             let line = line.to_string();
             let tokens = if let Some(tokenizer) = tokenizer.clone() {
-                tokenizer
-                    .encode(line.clone(), false)
-                    .map_err(internal_error)?
-                    .len()
+                tokenizer.encode(line.clone(), false)?.len()
             } else {
                 line.len()
             };
@@ -425,8 +409,7 @@ async fn request_completion(
         .json(&json)
         .headers(headers)
         .send()
-        .await
-        .map_err(internal_error)?;
+        .await?;
 
     let model = &params.model;
     let generations = parse_generations(
@@ -437,7 +420,7 @@ async fn request_completion(
     info!(
         model,
         compute_generations_ms = time,
-        generations = serde_json::to_string(&generations).map_err(internal_error)?,
+        generations = serde_json::to_string(&generations)?,
         "{model} computed generations in {time} ms"
     );
     generations
@@ -483,20 +466,13 @@ async fn download_tokenizer_file(
     if to.as_ref().exists() {
         return Ok(());
     }
-    tokio::fs::create_dir_all(
-        to.as_ref()
-            .parent()
-            .ok_or_else(|| internal_error("invalid tokenizer path"))?,
-    )
-    .await
-    .map_err(internal_error)?;
+    tokio::fs::create_dir_all(to.as_ref().parent().ok_or(Error::InvalidTokenizerPath)?).await?;
     let headers = build_headers(api_token, ide)?;
     let mut file = tokio::fs::OpenOptions::new()
         .write(true)
         .create(true)
         .open(to)
-        .await
-        .map_err(internal_error)?;
+        .await?;
     let http_client = http_client.clone();
     let url = url.to_owned();
     tokio::spawn(async move {
@@ -528,8 +504,7 @@ async fn download_tokenizer_file(
             }
         };
     })
-    .await
-    .map_err(internal_error)?;
+    .await?;
     Ok(())
 }
 
@@ -555,7 +530,15 @@ async fn get_tokenizer(
                 }
             },
             TokenizerConfig::HuggingFace { repository } => {
-                let path = cache_dir.as_ref().join(repository).join("tokenizer.json");
+                let (org, repo) = repository
+                    .split_once('/')
+                    .map(|(org, repo)| (org, repo))
+                    .ok_or(Error::InvalidRepositoryId)?;
+                let path = cache_dir
+                    .as_ref()
+                    .join(org)
+                    .join(repo)
+                    .join("tokenizer.json");
                 let url =
                     format!("https://huggingface.co/{repository}/resolve/main/tokenizer.json");
                 download_tokenizer_file(http_client, &url, api_token, &path, ide).await?;
@@ -596,7 +579,7 @@ fn build_url(model: &str) -> String {
 }
 
 impl Backend {
-    async fn get_completions(&self, params: CompletionParams) -> Result<CompletionResult> {
+    async fn get_completions(&self, params: CompletionParams) -> LspResult<CompletionResult> {
         let request_id = Uuid::new_v4();
         let span = info_span!("completion_request", %request_id);
         async move {
@@ -673,7 +656,7 @@ impl Backend {
         }.instrument(span).await
     }
 
-    async fn accept_completion(&self, accepted: AcceptedCompletion) -> Result<()> {
+    async fn accept_completion(&self, accepted: AcceptedCompletion) -> LspResult<()> {
         info!(
             request_id = %accepted.request_id,
             accepted_position = accepted.accepted_completion,
@@ -683,7 +666,7 @@ impl Backend {
         Ok(())
     }
 
-    async fn reject_completion(&self, rejected: RejectedCompletion) -> Result<()> {
+    async fn reject_completion(&self, rejected: RejectedCompletion) -> LspResult<()> {
         info!(
             request_id = %rejected.request_id,
             shown_completions = serde_json::to_string(&rejected.shown_completions).map_err(internal_error)?,
@@ -695,8 +678,23 @@ impl Backend {
 
 #[tower_lsp::async_trait]
 impl LanguageServer for Backend {
-    async fn initialize(&self, params: InitializeParams) -> Result<InitializeResult> {
-        *self.workspace_folders.write().await = params.workspace_folders;
+    async fn initialize(&self, params: InitializeParams) -> LspResult<InitializeResult> {
+        *self.workspace_folders.write().await = params.workspace_folders.clone();
+        *self.supports_progress_bar.write().await = params
+            .capabilities
+            .window
+            .map(|window| window.work_done_progress.unwrap_or(false))
+            .unwrap_or(false);
+        let position_encoding = params.capabilities.general.and_then(|general_cap| {
+            general_cap.position_encodings.and_then(|encodings| {
+                if encodings.contains(&PositionEncodingKind::UTF8) {
+                    Some(PositionEncodingKind::UTF8)
+                } else {
+                    // self.client.show_message(MessageType::WARNING, "llm-ls only supports UTF-8 position encoding, defaulting to UTF-16 which might cause offsetting errors").await;
+                    None
+                }
+            })
+        });
         Ok(InitializeResult {
             server_info: Some(ServerInfo {
                 name: "llm-ls".to_owned(),
@@ -706,12 +704,78 @@ impl LanguageServer for Backend {
                 text_document_sync: Some(TextDocumentSyncCapability::Kind(
                     TextDocumentSyncKind::INCREMENTAL,
                 )),
+                position_encoding,
                 ..Default::default()
             },
         })
     }
 
     async fn initialized(&self, _: InitializedParams) {
+        let client = self.client.clone();
+        let snippet_retriever = self.snippet_retriever.clone();
+        let supports_progress_bar = self.supports_progress_bar.clone();
+        let workspace_folders = self.workspace_folders.clone();
+        let token = NumberOrString::Number(42);
+
+        let token_copy = NumberOrString::Number(42);
+        let handle = tokio::spawn(async move {
+            let guard = workspace_folders.read().await;
+            if let Some(workspace_folders) = guard.as_ref() {
+                if *supports_progress_bar.read().await {
+                    match client
+                        .send_request::<WorkDoneProgressCreate>(WorkDoneProgressCreateParams {
+                            token: token.clone(),
+                        })
+                        .await
+                    {
+                        Ok(_) => (),
+                        Err(err) => {
+                            error!("err: {err}");
+                            return;
+                        }
+                    };
+                    client
+                        .send_notification::<Progress>(ProgressParams {
+                            token: token.clone(),
+                            value: ProgressParamsValue::WorkDone(WorkDoneProgress::Begin(
+                                WorkDoneProgressBegin {
+                                    title: "creating workspace embeddings".to_owned(),
+                                    ..Default::default()
+                                },
+                            )),
+                        })
+                        .await;
+                }
+                snippet_retriever
+                    .write()
+                    .await
+                    .build_workspace_snippets(
+                        client.clone(),
+                        token.clone(),
+                        workspace_folders[0].uri.path(),
+                    )
+                    .await
+                    .expect("failed to build workspace snippets");
+            }
+        });
+        let mut guard = self.cancel_snippet_build_rx.write().await;
+        tokio::select! {
+            _ = handle => {
+                if *self.supports_progress_bar.read().await {
+                    self.client
+                        .send_notification::<Progress>(ProgressParams {
+                            token: token_copy,
+                            value: ProgressParamsValue::WorkDone(WorkDoneProgress::End(
+                                WorkDoneProgressEnd {
+                                    ..Default::default()
+                                },
+                            )),
+                        })
+                        .await;
+                }
+            },
+            _ = guard.recv() => return,
+        }
         self.client
             .log_message(MessageType::INFO, "llm-ls initialized")
             .await;
@@ -759,6 +823,7 @@ impl LanguageServer for Backend {
         if let Some(doc) = doc {
             for change in &params.content_changes {
                 if let Some(range) = change.range {
+                    // TODO: self.snippet_retriever.write().await.update_document(uri).await?;
                     match doc.change(range, &change.text).await {
                         Ok(()) => info!("{uri} changed"),
                         Err(err) => error!("error when changing {uri}: {err}"),
@@ -790,8 +855,12 @@ impl LanguageServer for Backend {
         info!("{uri} closed");
     }
 
-    async fn shutdown(&self) -> Result<()> {
+    async fn shutdown(&self) -> LspResult<()> {
         debug!("shutdown");
+        self.cancel_snippet_build_tx
+            .send(())
+            .await
+            .map_err(internal_error)?;
         Ok(())
     }
 }
@@ -799,15 +868,12 @@ impl LanguageServer for Backend {
 fn build_headers(api_token: Option<&String>, ide: Ide) -> Result<HeaderMap> {
     let mut headers = HeaderMap::new();
     let user_agent = format!("{NAME}/{VERSION}; rust/unknown; ide/{ide:?}");
-    headers.insert(
-        USER_AGENT,
-        HeaderValue::from_str(&user_agent).map_err(internal_error)?,
-    );
+    headers.insert(USER_AGENT, HeaderValue::from_str(&user_agent)?);
 
     if let Some(api_token) = api_token {
         headers.insert(
             AUTHORIZATION,
-            HeaderValue::from_str(&format!("Bearer {api_token}")).map_err(internal_error)?,
+            HeaderValue::from_str(&format!("Bearer {api_token}"))?,
         );
     }
 
@@ -847,6 +913,12 @@ async fn main() {
         .build()
         .expect("failed to build reqwest unsafe client");
 
+    let snippet_retriever = Arc::new(RwLock::new(
+        SnippetRetriever::new(cache_dir.clone(), 20, 10)
+            .await
+            .expect("failed to initialise snippet retriever"),
+    ));
+    let (cancel_snippet_build_tx, rx) = mpsc::channel(1);
     let (service, socket) = LspService::build(|client| Backend {
         cache_dir,
         client,
@@ -860,6 +932,10 @@ async fn main() {
                 .checked_sub(MAX_WARNING_REPEAT)
                 .expect("instant to be in bounds"),
         )),
+        snippet_retriever,
+        supports_progress_bar: Arc::new(RwLock::new(false)),
+        cancel_snippet_build_tx,
+        cancel_snippet_build_rx: Arc::new(RwLock::new(rx)),
     })
     .custom_method("llm-ls/getCompletions", Backend::get_completions)
     .custom_method("llm-ls/acceptCompletion", Backend::accept_completion)
