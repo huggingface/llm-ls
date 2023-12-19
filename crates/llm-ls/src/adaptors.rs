@@ -67,7 +67,7 @@ fn parse_api_text(text: &str) -> Result<Vec<Generation>, jsonrpc::Error> {
 fn build_ollama_body(prompt: String, params: &CompletionParams) -> Value {
     serde_json::json!({
         "prompt": prompt,
-        "model": params.request_body.as_ref().ok_or_else(|| "missing request_body").get("model"),
+        "model": params.request_body.as_ref().ok_or_else(|| internal_error("missing request_body")).expect("Unable to make request for ollama").get("model"),
         "stream": false,
         // As per [modelfile](https://github.com/jmorganca/ollama/blob/main/docs/modelfile.md#valid-parameters-and-values)
         "options": {
@@ -113,7 +113,7 @@ fn parse_ollama_text(text: &str) -> Result<Vec<Generation>, jsonrpc::Error> {
 fn build_openai_body(prompt: String, params: &CompletionParams) -> Value {
     serde_json::json!({
         "prompt": prompt,
-        "model": params.request_body.as_ref().ok_or_else(|| internal_error("missing request_body")).get("model"),
+        "model": params.request_body.as_ref().ok_or_else(|| internal_error("missing request_body")).expect("Unable to make request for openai").get("model"),
         "max_tokens": params.request_params.max_new_tokens,
         "temperature": params.request_params.temperature,
         "top_p": params.request_params.top_p,
