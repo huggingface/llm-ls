@@ -997,6 +997,7 @@ dependencies = [
  "tree-sitter-java",
  "tree-sitter-javascript",
  "tree-sitter-json",
+ "tree-sitter-kotlin",
  "tree-sitter-lua",
  "tree-sitter-md",
  "tree-sitter-objc",
@@ -2419,6 +2420,16 @@ name = "tree-sitter-json"
 version = "0.20.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "50d82d2e33ee675dc71289e2ace4f8f9cf96d36d81400e9dae5ea61edaf5dea6"
+dependencies = [
+ "cc",
+ "tree-sitter",
+]
+
+[[package]]
+name = "tree-sitter-kotlin"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1b5f367466210220a194a2d8831fc12d15aa13305e7bcdf2dba47714aa328e86"
 dependencies = [
  "cc",
  "tree-sitter",

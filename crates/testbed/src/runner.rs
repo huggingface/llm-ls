@@ -52,6 +52,7 @@ async fn pytest_runner(
         .ok_or(anyhow!("failed to take stdout"))?
         .read_to_string(&mut stdout)
         .await?;
+    child.wait().await?;
 
     // XXX: the pytest command can still fail even after the compilation check
     // the above check should prevent an error, but better safe than sorry
@@ -124,6 +125,7 @@ async fn cargo_runner(
         .ok_or(anyhow!("failed to take stdout"))?
         .read_to_string(&mut stdout)
         .await?;
+    child.wait().await?;
     let lines = stdout.split_terminator('\n');
     let mut passed = 0;
     let mut failed = 0;
@@ -173,6 +175,7 @@ async fn jest_runner(
         .ok_or(anyhow!("failed to take stderr"))?
         .read_to_string(&mut stderr)
         .await?;
+    child.wait().await?;
     let lines = stderr.split_terminator('\n');
     let mut passed = 0f32;
     let mut failed = 0f32;
@@ -183,7 +186,7 @@ async fn jest_runner(
             for word in words {
                 if word.contains("passed") {
                     passed = prev.parse::<u32>()? as f32;
-                } else if line.contains("failed") {
+                } else if word.contains("failed") {
                     failed = prev.parse::<u32>()? as f32;
                 }
                 prev = word;
@@ -228,6 +231,7 @@ async fn vitest_runner(
         .ok_or(anyhow!("failed to take stdout"))?
         .read_to_string(&mut stdout)
         .await?;
+    child.wait().await?;
     let lines = stdout.split_terminator('\n');
     let mut passed = 0f32;
     let mut failed = 0f32;
@@ -238,7 +242,7 @@ async fn vitest_runner(
             for word in words {
                 if word.contains("passed") {
                     passed = prev.parse::<u32>()? as f32;
-                } else if line.contains("failed") {
+                } else if word.contains("failed") {
                     failed = prev.parse::<u32>()? as f32;
                 }
                 prev = word;

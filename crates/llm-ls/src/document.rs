@@ -1,7 +1,6 @@
 use ropey::Rope;
 use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::Range;
-use tracing::info;
 use tree_sitter::{InputEdit, Parser, Point, Tree};
 
 use crate::language_id::LanguageId;
@@ -83,6 +82,13 @@ fn get_parser(language_id: LanguageId) -> Result<Parser> {
             let mut parser = Parser::new();
             parser
                 .set_language(tree_sitter_json::language())
+                .map_err(internal_error)?;
+            Ok(parser)
+        }
+        LanguageId::Kotlin => {
+            let mut parser = Parser::new();
+            parser
+                .set_language(tree_sitter_kotlin::language())
                 .map_err(internal_error)?;
             Ok(parser)
         }
