@@ -30,10 +30,10 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 fn get_position_idx(rope: &Rope, row: usize, col: usize) -> Result<usize> {
     Ok(rope.try_line_to_char(row).map_err(internal_error)?
         + col.min(
-            rope.get_line(row.min(rope.len_lines() - 1))
+            rope.get_line(row.min(rope.len_lines().saturating_sub(1)))
                 .ok_or_else(|| internal_error(format!("failed to find line at {row}")))?
                 .len_chars()
-                - 1,
+                .saturating_sub(1),
         ))
 }
 
@@ -548,7 +548,7 @@ async fn get_tokenizer(
                 }
             },
             TokenizerConfig::HuggingFace { repository } => {
-                let path = cache_dir.as_ref().join(model).join("tokenizer.json");
+                let path = cache_dir.as_ref().join(repository).join("tokenizer.json");
                 let url =
                     format!("https://huggingface.co/{repository}/resolve/main/tokenizer.json");
                 download_tokenizer_file(http_client, &url, api_token, &path, ide).await?;
