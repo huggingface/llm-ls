@@ -1,3 +1,4 @@
+use adaptors::{adapt_body, adapt_headers, parse_generations};
 use document::Document;
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, USER_AGENT};
 use ropey::Rope;
@@ -18,20 +19,21 @@ use tracing_appender::rolling;
 use tracing_subscriber::EnvFilter;
 use uuid::Uuid;
 
+mod adaptors;
 mod document;
 mod language_id;
 
 const MAX_WARNING_REPEAT: Duration = Duration::from_secs(3_600);
-const NAME: &str = "llm-ls";
-const VERSION: &str = env!("CARGO_PKG_VERSION");
+pub const NAME: &str = "llm-ls";
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 fn get_position_idx(rope: &Rope, row: usize, col: usize) -> Result<usize> {
     Ok(rope.try_line_to_char(row).map_err(internal_error)?
         + col.min(
-            rope.get_line(row.min(rope.len_lines() - 1))
+            rope.get_line(row.min(rope.len_lines().saturating_sub(1)))
                 .ok_or_else(|| internal_error(format!("failed to find line at {row}")))?
                 .len_chars()
-                - 1,
+                .saturating_sub(1),
         ))
 }
 
@@ -130,7 +132,7 @@ enum TokenizerConfig {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct RequestParams {
+pub struct RequestParams {
     max_new_tokens: u32,
     temperature: f32,
     do_sample: bool,
@@ -178,12 +180,12 @@ struct APIRequest {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-struct Generation {
+pub struct Generation {
     generated_text: String,
 }
 
 #[derive(Debug, Deserialize)]
-struct APIError {
+pub struct APIError {
     error: String,
 }
 
@@ -195,7 +197,7 @@ impl Display for APIError {
 
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
-enum APIResponse {
+pub enum APIResponse {
     Generation(Generation),
     Generations(Vec<Generation>),
     Error(APIError),
@@ -219,7 +221,7 @@ struct Completion {
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
-enum Ide {
+pub enum Ide {
     Neovim,
     VSCode,
     JetBrains,
@@ -261,7 +263,7 @@ struct RejectedCompletion {
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct CompletionParams {
+pub struct CompletionParams {
     #[serde(flatten)]
     text_document_position: TextDocumentPositionParams,
     request_params: RequestParams,
@@ -271,10 +273,12 @@ struct CompletionParams {
     fim: FimParams,
     api_token: Option<String>,
     model: String,
+    adaptor: Option<String>,
     tokens_to_clear: Vec<String>,
     tokenizer_config: Option<TokenizerConfig>,
     context_window: usize,
     tls_skip_verify_insecure: bool,
+    request_body: Option<serde_json::Map<String, serde_json::Value>>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -283,7 +287,7 @@ struct CompletionResult {
     completions: Vec<Completion>,
 }
 
-fn internal_error<E: Display>(err: E) -> Error {
+pub fn internal_error<E: Display>(err: E) -> Error {
     let err_msg = err.to_string();
     error!(err_msg);
     Error {
@@ -398,29 +402,30 @@ fn build_prompt(
 
 async fn request_completion(
     http_client: &reqwest::Client,
-    ide: Ide,
-    model: &str,
-    request_params: RequestParams,
-    api_token: Option<&String>,
     prompt: String,
+    params: &CompletionParams,
 ) -> Result<Vec<Generation>> {
     let t = Instant::now();
+
+    let json = adapt_body(prompt, params).map_err(internal_error)?;
+    let headers = adapt_headers(
+        params.adaptor.as_ref(),
+        params.api_token.as_ref(),
+        params.ide,
+    )?;
     let res = http_client
-        .post(build_url(model))
-        .json(&APIRequest {
-            inputs: prompt,
-            parameters: request_params.into(),
-        })
-        .headers(build_headers(api_token, ide)?)
+        .post(build_url(&params.model))
+        .json(&json)
+        .headers(headers)
         .send()
         .await
         .map_err(internal_error)?;
 
-    let generations = match res.json().await.map_err(internal_error)? {
-        APIResponse::Generation(gen) => vec![gen],
-        APIResponse::Generations(gens) => gens,
-        APIResponse::Error(err) => return Err(internal_error(err)),
-    };
+    let model = &params.model;
+    let generations = parse_generations(
+        params.adaptor.as_ref(),
+        res.text().await.map_err(internal_error)?.as_str(),
+    );
     let time = t.elapsed().as_millis();
     info!(
         model,
@@ -428,10 +433,10 @@ async fn request_completion(
         generations = serde_json::to_string(&generations).map_err(internal_error)?,
         "{model} computed generations in {time} ms"
     );
-    Ok(generations)
+    generations
 }
 
-fn parse_generations(
+fn format_generations(
     generations: Vec<Generation>,
     tokens_to_clear: &[String],
     completion_type: CompletionType,
@@ -524,7 +529,7 @@ async fn download_tokenizer_file(
 async fn get_tokenizer(
     model: &str,
     tokenizer_map: &mut HashMap<String, Arc<Tokenizer>>,
-    tokenizer_config: Option<TokenizerConfig>,
+    tokenizer_config: Option<&TokenizerConfig>,
     http_client: &reqwest::Client,
     cache_dir: impl AsRef<Path>,
     api_token: Option<&String>,
@@ -543,7 +548,7 @@ async fn get_tokenizer(
                 }
             },
             TokenizerConfig::HuggingFace { repository } => {
-                let path = cache_dir.as_ref().join(model).join("tokenizer.json");
+                let path = cache_dir.as_ref().join(repository).join("tokenizer.json");
                 let url =
                     format!("https://huggingface.co/{repository}/resolve/main/tokenizer.json");
                 download_tokenizer_file(http_client, &url, api_token, &path, ide).await?;
@@ -556,7 +561,7 @@ async fn get_tokenizer(
                 }
             }
             TokenizerConfig::Download { url, to } => {
-                download_tokenizer_file(http_client, &url, api_token, &to, ide).await?;
+                download_tokenizer_file(http_client, url, api_token, &to, ide).await?;
                 match Tokenizer::from_file(to) {
                     Ok(tokenizer) => Some(Arc::new(tokenizer)),
                     Err(err) => {
@@ -627,7 +632,7 @@ impl Backend {
             let tokenizer = get_tokenizer(
                 &params.model,
                 &mut *self.tokenizer_map.write().await,
-                params.tokenizer_config,
+                params.tokenizer_config.as_ref(),
                 &self.http_client,
                 &self.cache_dir,
                 params.api_token.as_ref(),
@@ -650,15 +655,12 @@ impl Backend {
             };
             let result = request_completion(
                 http_client,
-                params.ide,
-                &params.model,
-                params.request_params,
-                params.api_token.as_ref(),
                 prompt,
+                &params,
             )
             .await?;
 
-            let completions = parse_generations(result, &params.tokens_to_clear, completion_type);
+            let completions = format_generations(result, &params.tokens_to_clear, completion_type);
             Ok(CompletionResult { request_id, completions })
         }.instrument(span).await
     }
@@ -849,3 +851,4 @@ async fn main() {
 
     Server::new(stdin, stdout, socket).serve(service).await;
 }
+
