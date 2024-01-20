@@ -57,6 +57,10 @@ impl Display for CompletionType {
 fn should_complete(document: &Document, position: Position) -> Result<CompletionType> {
     let row = position.line as usize;
     let column = position.character as usize;
+    if document.text.len_chars() == 0 {
+        warn!("Document is empty");
+        return Ok(CompletionType::Empty);
+    }
     if let Some(tree) = &document.tree {
         let current_node = tree.root_node().descendant_for_point_range(
             tree_sitter::Point { row, column },
@@ -114,7 +118,7 @@ fn should_complete(document: &Document, position: Position) -> Result<Completion
     let next_char = document
         .text
         .get_char(start_idx + column)
-        .ok_or_else(|| internal_error(format!("failed to find char at {}", start_idx + column)))?;
+        .unwrap_or('\n'); // treat the end of document as newline
     if next_char.is_whitespace() {
         Ok(CompletionType::SingleLine)
     } else {
