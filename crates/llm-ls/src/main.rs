@@ -734,10 +734,19 @@ impl LanguageServer for Backend {
 
     async fn did_change(&self, params: DidChangeTextDocumentParams) {
         let uri = params.text_document.uri.to_string();
-        self.client
-            .log_message(MessageType::INFO, format!("{uri} changed"))
-            .await;
+        if params.content_changes.is_empty() {
+            return;
+        }
+
+        // ignore the output scheme
+        if uri.starts_with("output:") {
+            return;
+        }
+
         let mut document_map = self.document_map.write().await;
+        self.client
+            .log_message(MessageType::LOG, format!("{uri} changed"))
+            .await;
         let doc = document_map.get_mut(&uri);
         if let Some(doc) = doc {
             for change in &params.content_changes {
