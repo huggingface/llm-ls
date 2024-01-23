@@ -311,12 +311,12 @@ fn build_prompt(
         let mut after_iter = text.lines_at(pos.line as usize);
         let mut before_line = before_iter.next();
         if let Some(line) = before_line {
-            let col = (pos.character as usize).clamp(0, line.len_chars() - 1);
+            let col = (pos.character as usize).clamp(0, line.len_chars());
             before_line = Some(line.slice(0..col));
         }
         let mut after_line = after_iter.next();
         if let Some(line) = after_line {
-            let col = (pos.character as usize).clamp(0, line.len_chars() - 1);
+            let col = (pos.character as usize).clamp(0, line.len_chars());
             after_line = Some(line.slice(col..));
         }
         let mut before = vec![];
@@ -374,7 +374,7 @@ fn build_prompt(
         let mut first = true;
         for mut line in text.lines_at(pos.line as usize + 1).reversed() {
             if first {
-                let col = (pos.character as usize).clamp(0, line.len_chars() - 1);
+                let col = (pos.character as usize).clamp(0, line.len_chars());
                 line = line.slice(0..col);
                 first = false;
             }
