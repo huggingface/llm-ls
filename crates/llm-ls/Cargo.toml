@@ -8,7 +8,10 @@ name = "llm-ls"
 
 [dependencies]
 home = "0.5"
-ropey = "1.6"
+ropey = { version = "1.6", default-features = false, features = [
+  "simd",
+  "cr_lines",
+] }
 reqwest = { version = "0.11", default-features = false, features = [
   "json",
   "native-tls",
@@ -39,6 +42,7 @@ tree-sitter-html = "0.19"
 tree-sitter-java = "0.20"
 tree-sitter-javascript = "0.20"
 tree-sitter-json = "0.20"
+tree-sitter-kotlin = "0.3.1"
 tree-sitter-lua = "0.0.19"
 tree-sitter-md = "0.1"
 tree-sitter-objc = "3"

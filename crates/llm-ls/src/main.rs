@@ -1,3 +1,4 @@
+use adaptors::{adapt_body, adapt_headers, parse_generations};
 use document::Document;
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, USER_AGENT};
 use ropey::Rope;
@@ -18,12 +19,23 @@ use tracing_appender::rolling;
 use tracing_subscriber::EnvFilter;
 use uuid::Uuid;
 
+mod adaptors;
 mod document;
 mod language_id;
 
 const MAX_WARNING_REPEAT: Duration = Duration::from_secs(3_600);
-const NAME: &str = "llm-ls";
-const VERSION: &str = env!("CARGO_PKG_VERSION");
+pub const NAME: &str = "llm-ls";
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+fn get_position_idx(rope: &Rope, row: usize, col: usize) -> Result<usize> {
+    Ok(rope.try_line_to_char(row).map_err(internal_error)?
+        + col.min(
+            rope.get_line(row.min(rope.len_lines().saturating_sub(1)))
+                .ok_or_else(|| internal_error(format!("failed to find line at {row}")))?
+                .len_chars()
+                .saturating_sub(1),
+        ))
+}
 
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
 enum CompletionType {
@@ -42,45 +54,71 @@ impl Display for CompletionType {
     }
 }
 
-fn should_complete(document: &Document, position: Position) -> CompletionType {
+fn should_complete(document: &Document, position: Position) -> Result<CompletionType> {
     let row = position.line as usize;
     let column = position.character as usize;
     if let Some(tree) = &document.tree {
         let current_node = tree.root_node().descendant_for_point_range(
             tree_sitter::Point { row, column },
-            tree_sitter::Point { row, column },
+            tree_sitter::Point {
+                row,
+                column: column + 1,
+            },
         );
         if let Some(node) = current_node {
             if node == tree.root_node() {
-                return CompletionType::MultiLine;
+                return Ok(CompletionType::MultiLine);
             }
             let start = node.start_position();
             let end = node.end_position();
-            let mut start_offset = document.text.line_to_char(start.row) + start.column;
-            let mut end_offset = document.text.line_to_char(end.row) + end.column - 1;
-            let start_char = document.text.char(start_offset);
+            let mut start_offset = get_position_idx(&document.text, start.row, start.column)?;
+            let mut end_offset = get_position_idx(&document.text, end.row, end.column)? - 1;
+            let start_char = document
+                .text
+                .get_char(start_offset.min(document.text.len_chars() - 1))
+                .ok_or_else(|| {
+                    internal_error(format!("failed to find start char at {start_offset}"))
+                })?;
+            let end_char = document
+                .text
+                .get_char(end_offset.min(document.text.len_chars() - 1))
+                .ok_or_else(|| {
+                    internal_error(format!("failed to find end char at {end_offset}"))
+                })?;
             if !start_char.is_whitespace() {
                 start_offset += 1;
             }
-            let end_char = document.text.char(end_offset);
             if !end_char.is_whitespace() {
                 end_offset -= 1;
             }
             if start_offset >= end_offset {
-                return CompletionType::SingleLine;
+                return Ok(CompletionType::SingleLine);
             }
-            let slice = document.text.slice(start_offset..end_offset);
+            let slice = document
+                .text
+                .get_slice(start_offset..end_offset)
+                .ok_or_else(|| {
+                    internal_error(format!(
+                        "failed to find slice at {start_offset}..{end_offset}"
+                    ))
+                })?;
             if slice.to_string().trim().is_empty() {
-                return CompletionType::MultiLine;
+                return Ok(CompletionType::MultiLine);
             }
         }
     }
-    let start_idx = document.text.line_to_char(row);
-    let next_char = document.text.char(start_idx + column);
+    let start_idx = document
+        .text
+        .try_line_to_char(row)
+        .map_err(internal_error)?;
+    let next_char = document
+        .text
+        .get_char(start_idx + column)
+        .ok_or_else(|| internal_error(format!("failed to find char at {}", start_idx + column)))?;
     if next_char.is_whitespace() {
-        CompletionType::SingleLine
+        Ok(CompletionType::SingleLine)
     } else {
-        CompletionType::Empty
+        Ok(CompletionType::Empty)
     }
 }
 
@@ -94,7 +132,7 @@ enum TokenizerConfig {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct RequestParams {
+pub struct RequestParams {
     max_new_tokens: u32,
     temperature: f32,
     do_sample: bool,
@@ -142,12 +180,12 @@ struct APIRequest {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-struct Generation {
+pub struct Generation {
     generated_text: String,
 }
 
 #[derive(Debug, Deserialize)]
-struct APIError {
+pub struct APIError {
     error: String,
 }
 
@@ -159,7 +197,7 @@ impl Display for APIError {
 
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
-enum APIResponse {
+pub enum APIResponse {
     Generation(Generation),
     Generations(Vec<Generation>),
     Error(APIError),
@@ -183,7 +221,7 @@ struct Completion {
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
-enum Ide {
+pub enum Ide {
     Neovim,
     VSCode,
     JetBrains,
@@ -225,7 +263,7 @@ struct RejectedCompletion {
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct CompletionParams {
+pub struct CompletionParams {
     #[serde(flatten)]
     text_document_position: TextDocumentPositionParams,
     request_params: RequestParams,
@@ -235,10 +273,12 @@ struct CompletionParams {
     fim: FimParams,
     api_token: Option<String>,
     model: String,
+    adaptor: Option<String>,
     tokens_to_clear: Vec<String>,
     tokenizer_config: Option<TokenizerConfig>,
     context_window: usize,
     tls_skip_verify_insecure: bool,
+    request_body: Option<serde_json::Map<String, serde_json::Value>>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -247,7 +287,7 @@ struct CompletionResult {
     completions: Vec<Completion>,
 }
 
-fn internal_error<E: Display>(err: E) -> Error {
+pub fn internal_error<E: Display>(err: E) -> Error {
     let err_msg = err.to_string();
     error!(err_msg);
     Error {
@@ -271,12 +311,12 @@ fn build_prompt(
         let mut after_iter = text.lines_at(pos.line as usize);
         let mut before_line = before_iter.next();
         if let Some(line) = before_line {
-            let col = (pos.character as usize).clamp(0, line.len_chars());
+            let col = (pos.character as usize).clamp(0, line.len_chars() - 1);
             before_line = Some(line.slice(0..col));
         }
         let mut after_line = after_iter.next();
         if let Some(line) = after_line {
-            let col = (pos.character as usize).clamp(0, line.len_chars());
+            let col = (pos.character as usize).clamp(0, line.len_chars() - 1);
             after_line = Some(line.slice(col..));
         }
         let mut before = vec![];
@@ -334,7 +374,7 @@ fn build_prompt(
         let mut first = true;
         for mut line in text.lines_at(pos.line as usize + 1).reversed() {
             if first {
-                let col = (pos.character as usize).clamp(0, line.len_chars());
+                let col = (pos.character as usize).clamp(0, line.len_chars() - 1);
                 line = line.slice(0..col);
                 first = false;
             }
@@ -362,29 +402,30 @@ fn build_prompt(
 
 async fn request_completion(
     http_client: &reqwest::Client,
-    ide: Ide,
-    model: &str,
-    request_params: RequestParams,
-    api_token: Option<&String>,
     prompt: String,
+    params: &CompletionParams,
 ) -> Result<Vec<Generation>> {
     let t = Instant::now();
+
+    let json = adapt_body(prompt, params).map_err(internal_error)?;
+    let headers = adapt_headers(
+        params.adaptor.as_ref(),
+        params.api_token.as_ref(),
+        params.ide,
+    )?;
     let res = http_client
-        .post(build_url(model))
-        .json(&APIRequest {
-            inputs: prompt,
-            parameters: request_params.into(),
-        })
-        .headers(build_headers(api_token, ide)?)
+        .post(build_url(&params.model))
+        .json(&json)
+        .headers(headers)
         .send()
         .await
         .map_err(internal_error)?;
 
-    let generations = match res.json().await.map_err(internal_error)? {
-        APIResponse::Generation(gen) => vec![gen],
-        APIResponse::Generations(gens) => gens,
-        APIResponse::Error(err) => return Err(internal_error(err)),
-    };
+    let model = &params.model;
+    let generations = parse_generations(
+        params.adaptor.as_ref(),
+        res.text().await.map_err(internal_error)?.as_str(),
+    );
     let time = t.elapsed().as_millis();
     info!(
         model,
@@ -392,10 +433,10 @@ async fn request_completion(
         generations = serde_json::to_string(&generations).map_err(internal_error)?,
         "{model} computed generations in {time} ms"
     );
-    Ok(generations)
+    generations
 }
 
-fn parse_generations(
+fn format_generations(
     generations: Vec<Generation>,
     tokens_to_clear: &[String],
     completion_type: CompletionType,
@@ -488,7 +529,7 @@ async fn download_tokenizer_file(
 async fn get_tokenizer(
     model: &str,
     tokenizer_map: &mut HashMap<String, Arc<Tokenizer>>,
-    tokenizer_config: Option<TokenizerConfig>,
+    tokenizer_config: Option<&TokenizerConfig>,
     http_client: &reqwest::Client,
     cache_dir: impl AsRef<Path>,
     api_token: Option<&String>,
@@ -507,7 +548,7 @@ async fn get_tokenizer(
                 }
             },
             TokenizerConfig::HuggingFace { repository } => {
-                let path = cache_dir.as_ref().join(model).join("tokenizer.json");
+                let path = cache_dir.as_ref().join(repository).join("tokenizer.json");
                 let url =
                     format!("https://huggingface.co/{repository}/resolve/main/tokenizer.json");
                 download_tokenizer_file(http_client, &url, api_token, &path, ide).await?;
@@ -520,7 +561,7 @@ async fn get_tokenizer(
                 }
             }
             TokenizerConfig::Download { url, to } => {
-                download_tokenizer_file(http_client, &url, api_token, &to, ide).await?;
+                download_tokenizer_file(http_client, url, api_token, &to, ide).await?;
                 match Tokenizer::from_file(to) {
                     Ok(tokenizer) => Some(Arc::new(tokenizer)),
                     Err(err) => {
@@ -582,7 +623,7 @@ impl Backend {
                     *unauthenticated_warn_at = Instant::now();
                 }
             }
-            let completion_type = should_complete(document, params.text_document_position.position);
+            let completion_type = should_complete(document, params.text_document_position.position)?;
             info!(%completion_type, "completion type: {completion_type:?}");
             if completion_type == CompletionType::Empty {
                 return Ok(CompletionResult { request_id, completions: vec![]});
@@ -591,7 +632,7 @@ impl Backend {
             let tokenizer = get_tokenizer(
                 &params.model,
                 &mut *self.tokenizer_map.write().await,
-                params.tokenizer_config,
+                params.tokenizer_config.as_ref(),
                 &self.http_client,
                 &self.cache_dir,
                 params.api_token.as_ref(),
@@ -614,15 +655,12 @@ impl Backend {
             };
             let result = request_completion(
                 http_client,
-                params.ide,
-                &params.model,
-                params.request_params,
-                params.api_token.as_ref(),
                 prompt,
+                &params,
             )
             .await?;
 
-            let completions = parse_generations(result, &params.tokens_to_clear, completion_type);
+            let completions = format_generations(result, &params.tokens_to_clear, completion_type);
             Ok(CompletionResult { request_id, completions })
         }.instrument(span).await
     }
@@ -658,7 +696,7 @@ impl LanguageServer for Backend {
             }),
             capabilities: ServerCapabilities {
                 text_document_sync: Some(TextDocumentSyncCapability::Kind(
-                    TextDocumentSyncKind::FULL,
+                    TextDocumentSyncKind::INCREMENTAL,
                 )),
                 ..Default::default()
             },
@@ -702,9 +740,15 @@ impl LanguageServer for Backend {
         let mut document_map = self.document_map.write().await;
         let doc = document_map.get_mut(&uri);
         if let Some(doc) = doc {
-            match doc.change(&params.content_changes[0].text).await {
-                Ok(()) => info!("{uri} changed"),
-                Err(err) => error!("error when changing {uri}: {err}"),
+            for change in &params.content_changes {
+                if let Some(range) = change.range {
+                    match doc.change(range, &change.text).await {
+                        Ok(()) => info!("{uri} changed"),
+                        Err(err) => error!("error when changing {uri}: {err}"),
+                    }
+                } else {
+                    warn!("Could not update document, got change request with missing range");
+                }
             }
         } else {
             warn!("textDocument/didChange {uri}: document not found");
@@ -807,3 +851,4 @@ async fn main() {
 
     Server::new(stdin, stdout, socket).serve(service).await;
 }
+

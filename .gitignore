@@ -3,5 +3,5 @@ dist/
 target/
 .DS_Store
 __pycache__/
-results.md
+results.json
 .pytest_cache/
