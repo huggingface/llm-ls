@@ -11,7 +11,13 @@ use tower_lsp::jsonrpc;
 fn build_tgi_body(prompt: String, params: &RequestParams) -> Value {
     serde_json::json!({
         "inputs": prompt,
-        "parameters": params,
+        "parameters": {
+            "max_new_tokens": params.max_new_tokens,
+            "temperature": params.temperature,
+            "do_sample": params.do_sample,
+            "top_p": params.top_p,
+            "stop_tokens": params.stop_tokens.clone()
+        },
     })
 }
 
