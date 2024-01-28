@@ -7,15 +7,17 @@ edition = "2021"
 name = "llm-ls"
 
 [dependencies]
-arrow-array = "47"
-arrow-schema = "47"
+arrow-array = "49"
+arrow-schema = "49"
 candle = { version = "0.3", package = "candle-core", default-features = false }
 candle-nn = "0.3"
 candle-transformers = "0.3"
+clap = { version = "4", features = ["derive"] }
 futures-util = "0.3"
 gitignore = { path = "../gitignore" }
 hf-hub = { version = "0.3", features = ["tokio"] }
 home = "0.5"
+lance-linalg = "0.9.9"
 ropey = { version = "1.6", default-features = false, features = [
   "simd",
   "cr_lines",
@@ -46,7 +48,7 @@ tree-sitter-cpp = "0.20"
 tree-sitter-c-sharp = "0.20"
 tree-sitter-css = "0.20"
 tree-sitter-elixir = "0.1"
-tree-sitter-erlang = "0.3"
+tree-sitter-erlang = "0.4"
 tree-sitter-go = "0.20"
 tree-sitter-html = "0.19"
 tree-sitter-java = "0.20"
@@ -56,16 +58,19 @@ tree-sitter-kotlin = "0.3.1"
 tree-sitter-lua = "0.0.19"
 tree-sitter-md = "0.1"
 tree-sitter-objc = "3"
-tree-sitter-php = "0.20.0"
+tree-sitter-php = "0.21"
 tree-sitter-python = "0.20"
 tree-sitter-r = "0.19"
 tree-sitter-ruby = "0.20"
 tree-sitter-rust = "0.20"
 tree-sitter-scala = "0.20"
-tree-sitter-swift = "0.3"
+tree-sitter-swift = "0.4"
 tree-sitter-typescript = "0.20"
-vectordb = "0.3"
+vectordb = "0.4"
 
 [dependencies.uuid]
 version = "1.4"
 features = ["v4", "fast-rng", "serde"]
+
+[dev-dependencies]
+lsp-client = { path = "../lsp-client" }

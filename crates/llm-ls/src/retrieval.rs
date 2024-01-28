@@ -1,6 +1,6 @@
 use crate::error::Result;
-use arrow_array::builder::ListBuilder;
-use arrow_array::{Float32Array, RecordBatch, RecordBatchIterator, StringArray, UInt32Array};
+use arrow_array::builder::{FixedSizeListBuilder, Float32Builder};
+use arrow_array::{RecordBatch, RecordBatchIterator, StringArray, UInt32Array};
 use arrow_schema::{DataType, Field, Schema};
 use candle::utils::{cuda_is_available, metal_is_available};
 use candle::{Device, Tensor};
@@ -9,6 +9,7 @@ use candle_transformers::models::bert::{BertModel, Config, DTYPE};
 use futures_util::StreamExt;
 use gitignore::Gitignore;
 use hf_hub::{api::tokio::Api, Repo, RepoType};
+use lance_linalg::distance::MetricType;
 use std::collections::VecDeque;
 use std::path::Path;
 use std::{path::PathBuf, sync::Arc};
@@ -22,7 +23,9 @@ use tower_lsp::lsp_types::{
 };
 use tower_lsp::Client;
 use tracing::{error, info, warn};
-use vectordb::{Database, Table};
+use vectordb::error::Error;
+use vectordb::table::ReadParams;
+use vectordb::{Connection, Database, Table};
 
 // TODO:
 // - create sliding window and splitting of files logic
@@ -182,15 +185,18 @@ fn device(cpu: bool) -> Result<Device> {
     }
 }
 
-async fn initialse_database(cache_path: PathBuf) -> Table {
+async fn initialse_database(cache_path: PathBuf) -> Arc<dyn Table> {
     let uri = cache_path.join("database");
     let db = Database::connect(uri.to_str().expect("path should be utf8"))
         .await
         .expect("failed to open database");
-    match db.open_table("code-slices").await {
+    match db
+        .open_table_with_params("code-slices", ReadParams::default())
+        .await
+    {
         Ok(table) => table,
         Err(vectordb::error::Error::TableNotFound { .. }) => {
-            let schema = Schema::new(vec![
+            let schema = Arc::new(Schema::new(vec![
                 Field::new(
                     "vector",
                     DataType::FixedSizeList(
@@ -203,11 +209,11 @@ async fn initialse_database(cache_path: PathBuf) -> Table {
                 Field::new("file_url", DataType::Utf8, false),
                 Field::new("start_line_no", DataType::UInt32, false),
                 Field::new("end_line_no", DataType::UInt32, false),
-            ]);
+            ]));
             let batch = RecordBatch::try_new(
-                Arc::new(schema),
+                schema.clone(),
                 vec![
-                    Arc::new(ListBuilder::new(Float32Array::builder(768)).finish()),
+                    Arc::new(FixedSizeListBuilder::new(Float32Builder::new(), 768).finish()),
                     Arc::new(StringArray::from(Vec::<&str>::new())),
                     Arc::new(StringArray::from(Vec::<&str>::new())),
                     Arc::new(UInt32Array::from(Vec::<u32>::new())),
@@ -217,7 +223,10 @@ async fn initialse_database(cache_path: PathBuf) -> Table {
             .expect("failure while defining schema");
             db.create_table(
                 "code-slices",
-                RecordBatchIterator::new(vec![batch.clone()].into_iter().map(Ok), batch.schema()),
+                Box::new(RecordBatchIterator::new(
+                    vec![batch].into_iter().map(Ok),
+                    schema,
+                )),
                 None,
             )
             .await
@@ -228,7 +237,7 @@ async fn initialse_database(cache_path: PathBuf) -> Table {
 }
 
 pub(crate) struct SnippetRetriever {
-    db: Table,
+    db: Arc<dyn Table>,
     model: Arc<BertModel>,
     tokenizer: Tokenizer,
     window_size: usize,
@@ -260,9 +269,10 @@ impl SnippetRetriever {
         token: NumberOrString,
         workspace_root: &str,
     ) -> Result<()> {
+        info!("building workspace snippets");
         let workspace_root = PathBuf::from(workspace_root);
         let mut files = Vec::new();
-        let gitignore = Gitignore::parse(&workspace_root)?;
+        let gitignore = Gitignore::parse(&workspace_root).ok();
 
         client
             .send_notification::<Progress>(ProgressParams {
@@ -284,8 +294,10 @@ impl SnippetRetriever {
 
                 let src_path = entry.path();
 
-                if gitignore.ignored(&src_path)? {
-                    continue;
+                if let Some(gitignore) = &gitignore {
+                    if gitignore.ignored(&src_path)? {
+                        continue;
+                    }
                 }
 
                 if entry_type.is_dir() {
@@ -300,7 +312,6 @@ impl SnippetRetriever {
         }
         for (i, file) in files.iter().enumerate() {
             let file_url = file.to_str().expect("file path should be utf8").to_string();
-            info!("adding {file_url} to embeddings");
             self.add_document(file_url).await?;
             client
                 .send_notification::<Progress>(ProgressParams {
@@ -321,7 +332,7 @@ impl SnippetRetriever {
     pub(crate) async fn add_document(&mut self, file_url: String) -> Result<()> {
         let file = tokio::fs::read_to_string(&file_url).await?;
         let lines = file.split('\n').collect::<Vec<_>>();
-        let mut embeddings = ListBuilder::new(Float32Array::builder(768));
+        let mut embeddings = FixedSizeListBuilder::new(Float32Builder::new(), 768);
         let mut snippets = Vec::new();
         let mut file_urls = Vec::new();
         let mut start_line_no = Vec::new();
@@ -330,14 +341,22 @@ impl SnippetRetriever {
             let end_line = (start_line + self.window_size - 1).min(lines.len());
             if self
                 .exists(format!(
-                    "file_url = {file_url} AND start_line_no = {start_line} AND end_line_no = {end_line}"
+                    "file_url = '{file_url}' AND start_line_no = {start_line} AND end_line_no = {end_line}"
                 ))
                 .await?
             {
+                info!("snippet {file_url}[{start_line}, {end_line}] already indexed");
                 continue;
             }
             let window = lines[start_line..end_line].to_vec();
             let snippet = window.join("\n");
+            if snippet.is_empty() {
+                continue;
+            }
+            if snippet.len() > 1024 {
+                warn!("snippet {file_url}[{start_line}, {end_line}] is too big to be indexed");
+                continue;
+            }
             let tokenizer = self
                 .tokenizer
                 .with_padding(None)
@@ -385,7 +404,10 @@ impl SnippetRetriever {
         )?;
         self.db
             .add(
-                RecordBatchIterator::new(vec![batch].into_iter().map(Ok), self.db.schema()),
+                Box::new(RecordBatchIterator::new(
+                    vec![batch].into_iter().map(Ok),
+                    self.db.schema(),
+                )),
                 None,
             )
             .await?;
@@ -403,13 +425,25 @@ impl SnippetRetriever {
     pub(crate) async fn exists(&self, filter: String) -> Result<bool> {
         let mut results = self
             .db
-            .search(Float32Array::from(vec![0.0; 768]))
-            .filter(Some(filter))
-            .execute()
+            .search(&[0.])
+            .metric_type(MetricType::Cosine)
+            .filter(&filter)
+            .execute_stream()
             .await?;
-        let first = results.next().await;
-        let exists = first.is_some();
-        info!("exists: {exists}");
+        let exists = if let Some(record_batch) = results.next().await {
+            let record_batch = record_batch.map_err(Into::<Error>::into)?;
+            if record_batch.num_rows() > 0 {
+                true
+            } else {
+                info!("record batch: {record_batch:?}");
+                false
+            }
+        } else {
+            false
+        };
+        if !exists {
+            info!("filter: {filter}");
+        }
         Ok(exists)
     }
 

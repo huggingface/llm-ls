@@ -110,7 +110,6 @@ impl Gitignore {
             require_literal_leading_dot: false,
         };
         for rule in &self.rules {
-            println!("matching {} to {rule:?}", path.to_str().unwrap());
             let path_str = path.to_str().ok_or(Error::NonUtf8Path)?;
             let to_match = if path.is_dir() {
                 format!("{path_str}/")

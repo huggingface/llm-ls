@@ -1,4 +1,5 @@
 use adaptors::{adapt_body, adapt_headers, parse_generations};
+use clap::Parser;
 use document::Document;
 use error::{Error, Result};
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, USER_AGENT};
@@ -12,6 +13,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokenizers::Tokenizer;
 use tokio::io::AsyncWriteExt;
+use tokio::net::TcpListener;
 use tokio::sync::{mpsc, RwLock};
 use tower_lsp::jsonrpc::Result as LspResult;
 use tower_lsp::lsp_types::notification::Progress;
@@ -532,7 +534,6 @@ async fn get_tokenizer(
             TokenizerConfig::HuggingFace { repository } => {
                 let (org, repo) = repository
                     .split_once('/')
-                    .map(|(org, repo)| (org, repo))
                     .ok_or(Error::InvalidRepositoryId)?;
                 let path = cache_dir
                     .as_ref()
@@ -751,7 +752,7 @@ impl LanguageServer for Backend {
                     .await
                     .build_workspace_snippets(
                         client.clone(),
-                        token.clone(),
+                        token,
                         workspace_folders[0].uri.path(),
                     )
                     .await
@@ -880,10 +881,22 @@ fn build_headers(api_token: Option<&String>, ide: Ide) -> Result<HeaderMap> {
     Ok(headers)
 }
 
+#[derive(Parser, Debug)]
+#[command(author, version, about, long_about = None)]
+struct Args {
+    /// Wether to use a tcp socket for data transfer
+    #[arg(long = "port")]
+    socket: Option<usize>,
+
+    /// Wether to use stdio transport for data transfer, ignored because it is the default
+    /// behaviour
+    #[arg(short, long, default_value_t = true)]
+    stdio: bool,
+}
+
 #[tokio::main]
 async fn main() {
-    let stdin = tokio::io::stdin();
-    let stdout = tokio::io::stdout();
+    let args = Args::parse();
 
     let home_dir = home::home_dir().ok_or(()).expect("failed to find home dir");
     let cache_dir = home_dir.join(".cache/llm_ls");
@@ -942,5 +955,19 @@ async fn main() {
     .custom_method("llm-ls/rejectCompletion", Backend::reject_completion)
     .finish();
 
-    Server::new(stdin, stdout, socket).serve(service).await;
+    if let Some(port) = args.socket {
+        let addr = format!("127.0.0.1:{port}");
+        let listener = TcpListener::bind(&addr)
+            .await
+            .unwrap_or_else(|_| panic!("failed to bind tcp listener to {addr}"));
+        let (stream, _) = listener
+            .accept()
+            .await
+            .unwrap_or_else(|_| panic!("failed to accept new connections on {addr}"));
+        let (read, write) = tokio::io::split(stream);
+        Server::new(read, write, socket).serve(service).await;
+    } else {
+        let (stdin, stdout) = (tokio::io::stdin(), tokio::io::stdout());
+        Server::new(stdin, stdout, socket).serve(service).await;
+    }
 }
