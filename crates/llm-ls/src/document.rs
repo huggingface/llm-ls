@@ -237,18 +237,19 @@ impl Document {
                 },
             )
         } else {
-            let slice_size = old_end_idx - start_idx;
+            let removal_idx = self.text.try_line_to_char(range.end.line as usize).map_err(internal_error)? + (range.end.character as usize);
+            let slice_size = removal_idx - start_idx;
             self.text
-                .try_remove(start_idx..old_end_idx)
+                .try_remove(start_idx..removal_idx)
                 .map_err(internal_error)?;
             self.text.insert(start_idx, text);
             let rope = Rope::from_str(text);
             let text_len = rope.len_chars();
             let character_difference = text_len as isize - slice_size as isize;
             let new_end_idx = if character_difference.is_negative() {
-                old_end_idx - character_difference.wrapping_abs() as usize
+                removal_idx - character_difference.wrapping_abs() as usize
             } else {
-                old_end_idx + character_difference as usize
+                removal_idx + character_difference as usize
             };
             let row = self
                 .text
