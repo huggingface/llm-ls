@@ -237,7 +237,11 @@ impl Document {
                 },
             )
         } else {
-            let removal_idx = self.text.try_line_to_char(range.end.line as usize).map_err(internal_error)? + (range.end.character as usize);
+            let removal_idx = self
+                .text
+                .try_line_to_char(range.end.line as usize)
+                .map_err(internal_error)?
+                + (range.end.character as usize);
             let slice_size = removal_idx - start_idx;
             self.text
                 .try_remove(start_idx..removal_idx)

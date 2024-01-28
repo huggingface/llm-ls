@@ -808,8 +808,7 @@ impl LanguageServer for Backend {
             return;
         }
 
-        // ignore the output scheme
-        if uri.starts_with("output:") {
+        if params.text_document.uri.scheme() == "output" {
             return;
         }
 
