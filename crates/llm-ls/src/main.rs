@@ -400,7 +400,7 @@ async fn request_completion(
 ) -> Result<Vec<Generation>> {
     let t = Instant::now();
 
-    let json = adapt_body(prompt, params).map_err(internal_error)?;
+    let json = adapt_body(prompt, params)?;
     let headers = adapt_headers(
         params.adaptor.as_ref(),
         params.api_token.as_ref(),
@@ -414,10 +414,7 @@ async fn request_completion(
         .await?;
 
     let model = &params.model;
-    let generations = parse_generations(
-        params.adaptor.as_ref(),
-        res.text().await.map_err(internal_error)?.as_str(),
-    );
+    let generations = parse_generations(params.adaptor.as_ref(), res.text().await?.as_str())?;
     let time = t.elapsed().as_millis();
     info!(
         model,
@@ -425,7 +422,7 @@ async fn request_completion(
         generations = serde_json::to_string(&generations)?,
         "{model} computed generations in {time} ms"
     );
-    generations
+    Ok(generations)
 }
 
 fn format_generations(
