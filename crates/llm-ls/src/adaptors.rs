@@ -1,6 +1,6 @@
 use super::{
     internal_error, APIError, APIResponse, CompletionParams, Generation, Ide, RequestParams, NAME,
-    VERSION,
+    VERSION, APIParams
 };
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, USER_AGENT};
 use serde::{Deserialize, Serialize};
@@ -11,7 +11,7 @@ use tower_lsp::jsonrpc;
 fn build_tgi_body(prompt: String, params: &RequestParams) -> Value {
     serde_json::json!({
         "inputs": prompt,
-        "parameters": params,
+        "parameters": APIParams::from(params.clone()),
     })
 }
 
