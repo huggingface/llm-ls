@@ -115,6 +115,7 @@ fn should_complete(document: &Document, position: Position) -> Result<Completion
         .text
         .try_line_to_char(row)
         .map_err(internal_error)?;
+    // XXX: We treat the end of a document as a newline
     let next_char = document
         .text
         .get_char(start_idx + column)
