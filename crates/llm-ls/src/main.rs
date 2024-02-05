@@ -26,7 +26,7 @@ mod language_id;
 const MAX_WARNING_REPEAT: Duration = Duration::from_secs(3_600);
 pub const NAME: &str = "llm-ls";
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
-const HUGGINGFACE_INFERENCE_HOSTNAME: &str = "api-inference.huggingface.co";
+const HF_INFERENCE_API_HOSTNAME: &str = "api-inference.huggingface.co";
 
 fn get_position_idx(rope: &Rope, row: usize, col: usize) -> Result<usize> {
     Ok(rope.try_line_to_char(row).map_err(internal_error)?
@@ -614,7 +614,7 @@ impl Backend {
                 "received completion request for {}",
                 params.text_document_position.text_document.uri
             );
-            let is_using_hf_inference = params.adaptor.as_ref().unwrap_or(&adaptors::DEFAULT_ADAPTOR.to_string()).as_str() == adaptors::HUGGING_FACE;
+            let is_using_inference_api = params.adaptor.as_ref().unwrap_or(&adaptors::DEFAULT_ADAPTOR.to_string()).as_str() == adaptors::HUGGING_FACE;
             if params.api_token.is_none() && is_using_hf_inference {
                 let now = Instant::now();
                 let unauthenticated_warn_at = self.unauthenticated_warn_at.read().await;
