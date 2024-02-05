@@ -585,7 +585,7 @@ fn build_url(model: &str) -> String {
     if model.starts_with("http://") || model.starts_with("https://") {
         model.to_owned()
     } else {
-        format!("https://{HUGGINGFACE_INFERENCE_HOSTNAME}/models/{model}")
+        format!("https://{HF_INFERENCE_API_HOSTNAME}/models/{model}")
     }
 }
 
@@ -615,7 +615,7 @@ impl Backend {
                 params.text_document_position.text_document.uri
             );
             let is_using_inference_api = params.adaptor.as_ref().unwrap_or(&adaptors::DEFAULT_ADAPTOR.to_string()).as_str() == adaptors::HUGGING_FACE;
-            if params.api_token.is_none() && is_using_hf_inference {
+            if params.api_token.is_none() && is_using_inference_api {
                 let now = Instant::now();
                 let unauthenticated_warn_at = self.unauthenticated_warn_at.read().await;
                 if now.duration_since(*unauthenticated_warn_at) > MAX_WARNING_REPEAT {
