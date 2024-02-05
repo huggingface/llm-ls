@@ -614,7 +614,7 @@ impl Backend {
                 "received completion request for {}",
                 params.text_document_position.text_document.uri
             );
-            let is_using_inference_api = params.adaptor.as_ref().unwrap_or_else(|| &adaptors::DEFAULT_ADAPTOR.to_owned()).as_str() == adaptors::HUGGING_FACE;
+            let is_using_inference_api = params.adaptor.as_ref().unwrap_or(adaptors::DEFAULT_ADAPTOR).as_str() == adaptors::HUGGING_FACE;
             if params.api_token.is_none() && is_using_inference_api {
                 let now = Instant::now();
                 let unauthenticated_warn_at = self.unauthenticated_warn_at.read().await;
