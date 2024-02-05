@@ -206,11 +206,11 @@ fn parse_openai_text(text: &str) -> Result<Vec<Generation>, jsonrpc::Error> {
     }
 }
 
-const TGI: &str = "tgi";
-const HUGGING_FACE: &str = "huggingface";
-const OLLAMA: &str = "ollama";
-const OPENAI: &str = "openai";
-const DEFAULT_ADAPTOR: &str = HUGGING_FACE;
+pub(crate) const TGI: &str = "tgi";
+pub(crate) const HUGGING_FACE: &str = "huggingface";
+pub(crate) const OLLAMA: &str = "ollama";
+pub(crate) const OPENAI: &str = "openai";
+pub(crate) const DEFAULT_ADAPTOR: &str = HUGGING_FACE;
 
 fn unknown_adaptor_error(adaptor: Option<&String>) -> jsonrpc::Error {
     internal_error(format!("Unknown adaptor {:?}", adaptor))

@@ -26,6 +26,7 @@ mod language_id;
 const MAX_WARNING_REPEAT: Duration = Duration::from_secs(3_600);
 pub const NAME: &str = "llm-ls";
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+const HF_INFERENCE_API_HOSTNAME: &str = "api-inference.huggingface.co";
 
 fn get_position_idx(rope: &Rope, row: usize, col: usize) -> Result<usize> {
     Ok(rope.try_line_to_char(row).map_err(internal_error)?
@@ -589,7 +590,7 @@ fn build_url(model: &str) -> String {
     if model.starts_with("http://") || model.starts_with("https://") {
         model.to_owned()
     } else {
-        format!("https://api-inference.huggingface.co/models/{model}")
+        format!("https://{HF_INFERENCE_API_HOSTNAME}/models/{model}")
     }
 }
 
@@ -618,7 +619,8 @@ impl Backend {
                 "received completion request for {}",
                 params.text_document_position.text_document.uri
             );
-            if params.api_token.is_none() {
+            let is_using_inference_api = params.adaptor.as_ref().unwrap_or(&adaptors::DEFAULT_ADAPTOR.to_owned()).as_str() == adaptors::HUGGING_FACE;
+            if params.api_token.is_none() && is_using_inference_api {
                 let now = Instant::now();
                 let unauthenticated_warn_at = self.unauthenticated_warn_at.read().await;
                 if now.duration_since(*unauthenticated_warn_at) > MAX_WARNING_REPEAT {
