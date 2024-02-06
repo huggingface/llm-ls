@@ -196,47 +196,54 @@ fn parse_openai_text(text: &str) -> Result<Vec<Generation>> {
     }
 }
 
-pub(crate) const TGI: &str = "tgi";
-pub(crate) const HUGGING_FACE: &str = "huggingface";
-pub(crate) const OLLAMA: &str = "ollama";
-pub(crate) const OPENAI: &str = "openai";
-pub(crate) const DEFAULT_ADAPTOR: &str = HUGGING_FACE;
+#[derive(Debug, Default, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum Adaptor {
+    #[default]
+    HuggingFace,
+    Ollama,
+    OpenAi,
+    Tgi,
+}
+
+impl Display for Adaptor {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::HuggingFace => write!(f, "huggingface"),
+            Self::Ollama => write!(f, "ollama"),
+            Self::OpenAi => write!(f, "openai"),
+            Self::Tgi => write!(f, "tgi"),
+        }
+    }
+}
 
 pub fn adapt_body(prompt: String, params: &CompletionParams) -> Result<Value> {
-    match params
-        .adaptor
-        .as_ref()
-        .unwrap_or(&DEFAULT_ADAPTOR.to_string())
-        .as_str()
-    {
-        TGI => Ok(build_tgi_body(prompt, &params.request_params)),
-        HUGGING_FACE => Ok(build_api_body(prompt, &params.request_params)),
-        OLLAMA => Ok(build_ollama_body(prompt, params)),
-        OPENAI => Ok(build_openai_body(prompt, params)),
-        adaptor => Err(Error::UnknownAdaptor(adaptor.to_owned())),
+    match params.adaptor.as_ref().unwrap_or(&Adaptor::default()) {
+        Adaptor::HuggingFace => Ok(build_api_body(prompt, &params.request_params)),
+        Adaptor::Ollama => Ok(build_ollama_body(prompt, params)),
+        Adaptor::OpenAi => Ok(build_openai_body(prompt, params)),
+        Adaptor::Tgi => Ok(build_tgi_body(prompt, &params.request_params)),
     }
 }
 
 pub fn adapt_headers(
-    adaptor: Option<&String>,
+    adaptor: Option<&Adaptor>,
     api_token: Option<&String>,
     ide: Ide,
 ) -> Result<HeaderMap> {
-    match adaptor.unwrap_or(&DEFAULT_ADAPTOR.to_string()).as_str() {
-        TGI => build_tgi_headers(api_token, ide),
-        HUGGING_FACE => build_api_headers(api_token, ide),
-        OLLAMA => build_ollama_headers(),
-        OPENAI => build_openai_headers(api_token, ide),
-        adaptor => Err(Error::UnknownAdaptor(adaptor.to_owned())),
+    match adaptor.unwrap_or(&Adaptor::default()) {
+        Adaptor::HuggingFace => build_api_headers(api_token, ide),
+        Adaptor::Ollama => build_ollama_headers(),
+        Adaptor::OpenAi => build_openai_headers(api_token, ide),
+        Adaptor::Tgi => build_tgi_headers(api_token, ide),
     }
 }
 
-pub fn parse_generations(adaptor: Option<&String>, text: &str) -> Result<Vec<Generation>> {
-    match adaptor.unwrap_or(&DEFAULT_ADAPTOR.to_string()).as_str() {
-        TGI => parse_tgi_text(text),
-        HUGGING_FACE => parse_api_text(text),
-        OLLAMA => parse_ollama_text(text),
-        OPENAI => parse_openai_text(text),
-        adaptor => Err(Error::UnknownAdaptor(adaptor.to_owned())),
+pub fn parse_generations(adaptor: Option<&Adaptor>, text: &str) -> Result<Vec<Generation>> {
+    match adaptor.unwrap_or(&Adaptor::default()) {
+        Adaptor::HuggingFace => parse_api_text(text),
+        Adaptor::Ollama => parse_ollama_text(text),
+        Adaptor::OpenAi => parse_openai_text(text),
+        Adaptor::Tgi => parse_tgi_text(text),
     }
 }

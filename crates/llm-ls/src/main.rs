@@ -1,4 +1,4 @@
-use adaptors::{adapt_body, adapt_headers, parse_generations};
+use adaptors::{adapt_body, adapt_headers, parse_generations, Adaptor};
 use clap::Parser;
 use document::Document;
 use error::{Error, Result};
@@ -285,7 +285,7 @@ pub struct CompletionParams {
     fim: FimParams,
     api_token: Option<String>,
     model: String,
-    adaptor: Option<String>,
+    adaptor: Option<Adaptor>,
     tokens_to_clear: Vec<String>,
     tokenizer_config: Option<TokenizerConfig>,
     context_window: usize,
@@ -601,7 +601,7 @@ impl Backend {
                 "received completion request for {}",
                 params.text_document_position.text_document.uri
             );
-            let is_using_inference_api = params.adaptor.as_ref().unwrap_or(&adaptors::DEFAULT_ADAPTOR.to_owned()).as_str() == adaptors::HUGGING_FACE;
+            let is_using_inference_api = matches!(params.adaptor.as_ref().unwrap_or(&Adaptor::default()), Adaptor::HuggingFace);
             if params.api_token.is_none() && is_using_inference_api {
                 let now = Instant::now();
                 let unauthenticated_warn_at = self.unauthenticated_warn_at.read().await;
