@@ -127,13 +127,7 @@ fn get_parser(language_id: LanguageId) -> Result<Parser> {
                 .map_err(internal_error)?;
             Ok(parser)
         }
-        LanguageId::Ruby => {
-            let mut parser = Parser::new();
-            parser
-                .set_language(tree_sitter_ruby::language())
-                .map_err(internal_error)?;
-            Ok(parser)
-        }
+        LanguageId::Ruby => Ok(Parser::new()),
         LanguageId::Rust => {
             let mut parser = Parser::new();
             parser
