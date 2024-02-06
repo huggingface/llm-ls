@@ -1,8 +1,8 @@
-use adaptors::{adapt_body, adapt_headers, parse_generations};
+use backend::{build_body, build_headers, parse_generations, Backend};
 use document::Document;
-use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, USER_AGENT};
 use ropey::Rope;
 use serde::{Deserialize, Deserializer, Serialize};
+use serde_json::{Map, Value};
 use std::collections::HashMap;
 use std::fmt::Display;
 use std::path::{Path, PathBuf};
@@ -19,7 +19,7 @@ use tracing_appender::rolling;
 use tracing_subscriber::EnvFilter;
 use uuid::Uuid;
 
-mod adaptors;
+mod backend;
 mod document;
 mod language_id;
 
@@ -117,10 +117,7 @@ fn should_complete(document: &Document, position: Position) -> Result<Completion
         .try_line_to_char(row)
         .map_err(internal_error)?;
     // XXX: We treat the end of a document as a newline
-    let next_char = document
-        .text
-        .get_char(start_idx + column)
-        .unwrap_or('\n');
+    let next_char = document.text.get_char(start_idx + column).unwrap_or('\n');
     if next_char.is_whitespace() {
         Ok(CompletionType::SingleLine)
     } else {
@@ -131,9 +128,17 @@ fn should_complete(document: &Document, position: Position) -> Result<Completion
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(untagged)]
 enum TokenizerConfig {
-    Local { path: PathBuf },
-    HuggingFace { repository: String },
-    Download { url: String, to: PathBuf },
+    Local {
+        path: PathBuf,
+    },
+    HuggingFace {
+        repository: String,
+        api_token: Option<String>,
+    },
+    Download {
+        url: String,
+        to: PathBuf,
+    },
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -209,7 +214,7 @@ pub enum APIResponse {
     Error(APIError),
 }
 
-struct Backend {
+struct LlmService {
     cache_dir: PathBuf,
     client: Client,
     document_map: Arc<RwLock<HashMap<String, Document>>>,
@@ -272,19 +277,18 @@ struct RejectedCompletion {
 pub struct CompletionParams {
     #[serde(flatten)]
     text_document_position: TextDocumentPositionParams,
-    request_params: RequestParams,
     #[serde(default)]
     #[serde(deserialize_with = "parse_ide")]
     ide: Ide,
     fim: FimParams,
     api_token: Option<String>,
     model: String,
-    adaptor: Option<String>,
+    backend: Backend,
     tokens_to_clear: Vec<String>,
     tokenizer_config: Option<TokenizerConfig>,
     context_window: usize,
     tls_skip_verify_insecure: bool,
-    request_body: Option<serde_json::Map<String, serde_json::Value>>,
+    request_body: Map<String, Value>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -413,12 +417,8 @@ async fn request_completion(
 ) -> Result<Vec<Generation>> {
     let t = Instant::now();
 
-    let json = adapt_body(prompt, params).map_err(internal_error)?;
-    let headers = adapt_headers(
-        params.adaptor.as_ref(),
-        params.api_token.as_ref(),
-        params.ide,
-    )?;
+    let json = build_body(prompt, params);
+    let headers = build_headers(&params.backend, params.api_token.as_ref(), params.ide)?;
     let res = http_client
         .post(build_url(&params.model))
         .json(&json)
@@ -429,7 +429,7 @@ async fn request_completion(
 
     let model = &params.model;
     let generations = parse_generations(
-        params.adaptor.as_ref(),
+        &params.backend,
         res.text().await.map_err(internal_error)?.as_str(),
     );
     let time = t.elapsed().as_millis();
@@ -489,7 +489,7 @@ async fn download_tokenizer_file(
     )
     .await
     .map_err(internal_error)?;
-    let headers = build_headers(api_token, ide)?;
+    let headers = build_headers(&Backend::HuggingFace, api_token, ide)?;
     let mut file = tokio::fs::OpenOptions::new()
         .write(true)
         .create(true)
@@ -538,7 +538,6 @@ async fn get_tokenizer(
     tokenizer_config: Option<&TokenizerConfig>,
     http_client: &reqwest::Client,
     cache_dir: impl AsRef<Path>,
-    api_token: Option<&String>,
     ide: Ide,
 ) -> Result<Option<Arc<Tokenizer>>> {
     if let Some(tokenizer) = tokenizer_map.get(model) {
@@ -553,11 +552,14 @@ async fn get_tokenizer(
                     None
                 }
             },
-            TokenizerConfig::HuggingFace { repository } => {
+            TokenizerConfig::HuggingFace {
+                repository,
+                api_token,
+            } => {
                 let path = cache_dir.as_ref().join(repository).join("tokenizer.json");
                 let url =
                     format!("https://huggingface.co/{repository}/resolve/main/tokenizer.json");
-                download_tokenizer_file(http_client, &url, api_token, &path, ide).await?;
+                download_tokenizer_file(http_client, &url, api_token.as_ref(), &path, ide).await?;
                 match Tokenizer::from_file(path) {
                     Ok(tokenizer) => Some(Arc::new(tokenizer)),
                     Err(err) => {
@@ -567,7 +569,7 @@ async fn get_tokenizer(
                 }
             }
             TokenizerConfig::Download { url, to } => {
-                download_tokenizer_file(http_client, url, api_token, &to, ide).await?;
+                download_tokenizer_file(http_client, url, None, &to, ide).await?;
                 match Tokenizer::from_file(to) {
                     Ok(tokenizer) => Some(Arc::new(tokenizer)),
                     Err(err) => {
@@ -594,7 +596,7 @@ fn build_url(model: &str) -> String {
     }
 }
 
-impl Backend {
+impl LlmService {
     async fn get_completions(&self, params: CompletionParams) -> Result<CompletionResult> {
         let request_id = Uuid::new_v4();
         let span = info_span!("completion_request", %request_id);
@@ -611,15 +613,11 @@ impl Backend {
                 language_id = %document.language_id,
                 model = params.model,
                 ide = %params.ide,
-                max_new_tokens = params.request_params.max_new_tokens,
-                temperature = params.request_params.temperature,
-                do_sample = params.request_params.do_sample,
-                top_p = params.request_params.top_p,
-                stop_tokens = ?params.request_params.stop_tokens,
+                request_body = serde_json::to_string(&params.request_body).map_err(internal_error)?,
                 "received completion request for {}",
                 params.text_document_position.text_document.uri
             );
-            let is_using_inference_api = params.adaptor.as_ref().unwrap_or(&adaptors::DEFAULT_ADAPTOR.to_owned()).as_str() == adaptors::HUGGING_FACE;
+            let is_using_inference_api = matches!(params.backend, Backend::HuggingFace);
             if params.api_token.is_none() && is_using_inference_api {
                 let now = Instant::now();
                 let unauthenticated_warn_at = self.unauthenticated_warn_at.read().await;
@@ -642,7 +640,6 @@ impl Backend {
                 params.tokenizer_config.as_ref(),
                 &self.http_client,
                 &self.cache_dir,
-                params.api_token.as_ref(),
                 params.ide,
             )
             .await?;
@@ -693,7 +690,7 @@ impl Backend {
 }
 
 #[tower_lsp::async_trait]
-impl LanguageServer for Backend {
+impl LanguageServer for LlmService {
     async fn initialize(&self, params: InitializeParams) -> Result<InitializeResult> {
         *self.workspace_folders.write().await = params.workspace_folders;
         Ok(InitializeResult {
@@ -795,24 +792,6 @@ impl LanguageServer for Backend {
     }
 }
 
-fn build_headers(api_token: Option<&String>, ide: Ide) -> Result<HeaderMap> {
-    let mut headers = HeaderMap::new();
-    let user_agent = format!("{NAME}/{VERSION}; rust/unknown; ide/{ide:?}");
-    headers.insert(
-        USER_AGENT,
-        HeaderValue::from_str(&user_agent).map_err(internal_error)?,
-    );
-
-    if let Some(api_token) = api_token {
-        headers.insert(
-            AUTHORIZATION,
-            HeaderValue::from_str(&format!("Bearer {api_token}")).map_err(internal_error)?,
-        );
-    }
-
-    Ok(headers)
-}
-
 #[tokio::main]
 async fn main() {
     let stdin = tokio::io::stdin();
@@ -846,7 +825,7 @@ async fn main() {
         .build()
         .expect("failed to build reqwest unsafe client");
 
-    let (service, socket) = LspService::build(|client| Backend {
+    let (service, socket) = LspService::build(|client| LlmService {
         cache_dir,
         client,
         document_map: Arc::new(RwLock::new(HashMap::new())),
@@ -860,9 +839,9 @@ async fn main() {
                 .expect("instant to be in bounds"),
         )),
     })
-    .custom_method("llm-ls/getCompletions", Backend::get_completions)
-    .custom_method("llm-ls/acceptCompletion", Backend::accept_completion)
-    .custom_method("llm-ls/rejectCompletion", Backend::reject_completion)
+    .custom_method("llm-ls/getCompletions", LlmService::get_completions)
+    .custom_method("llm-ls/acceptCompletion", LlmService::accept_completion)
+    .custom_method("llm-ls/rejectCompletion", LlmService::reject_completion)
     .finish();
 
     Server::new(stdin, stdout, socket).serve(service).await;
