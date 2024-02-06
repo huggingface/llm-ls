@@ -1,25 +1,11 @@
 use super::{
-    internal_error, APIError, APIResponse, CompletionParams, Generation, Ide, RequestParams, NAME,
-    VERSION,
+    internal_error, APIError, APIResponse, CompletionParams, Generation, Ide, NAME, VERSION,
 };
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, USER_AGENT};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Map, Value};
 use std::fmt::Display;
 use tower_lsp::jsonrpc;
-
-fn build_tgi_body(prompt: String, params: &RequestParams) -> Value {
-    serde_json::json!({
-        "inputs": prompt,
-        "parameters": {
-            "max_new_tokens": params.max_new_tokens,
-            "temperature": params.temperature,
-            "do_sample": params.do_sample,
-            "top_p": params.top_p,
-            "stop_tokens": params.stop_tokens.clone()
-        },
-    })
-}
 
 fn build_tgi_headers(api_token: Option<&String>, ide: Ide) -> Result<HeaderMap, jsonrpc::Error> {
     let mut headers = HeaderMap::new();
@@ -45,16 +31,12 @@ fn parse_tgi_text(text: &str) -> Result<Vec<Generation>, jsonrpc::Error> {
             APIResponse::Generation(gen) => vec![gen],
             APIResponse::Generations(_) => {
                 return Err(internal_error(
-                    "You are attempting to parse a result in the API inference format when using the `tgi` adaptor",
+                    "You are attempting to parse a result in the API inference format when using the `tgi` backend",
                 ))
             }
             APIResponse::Error(err) => return Err(internal_error(err)),
         };
     Ok(generations)
-}
-
-fn build_api_body(prompt: String, params: &RequestParams) -> Value {
-    build_tgi_body(prompt, params)
 }
 
 fn build_api_headers(api_token: Option<&String>, ide: Ide) -> Result<HeaderMap, jsonrpc::Error> {
@@ -70,20 +52,6 @@ fn parse_api_text(text: &str) -> Result<Vec<Generation>, jsonrpc::Error> {
     Ok(generations)
 }
 
-fn build_ollama_body(prompt: String, params: &CompletionParams) -> Value {
-    serde_json::json!({
-        "prompt": prompt,
-        "model": params.request_body.as_ref().ok_or_else(|| internal_error("missing request_body")).expect("Unable to make request for ollama").get("model"),
-        "stream": false,
-        // As per [modelfile](https://github.com/jmorganca/ollama/blob/main/docs/modelfile.md#valid-parameters-and-values)
-        "options": {
-            "num_predict": params.request_params.max_new_tokens,
-            "temperature": params.request_params.temperature,
-            "top_p": params.request_params.top_p,
-            "stop": params.request_params.stop_tokens.clone(),
-        }
-    })
-}
 fn build_ollama_headers() -> Result<HeaderMap, jsonrpc::Error> {
     Ok(HeaderMap::new())
 }
@@ -114,17 +82,6 @@ fn parse_ollama_text(text: &str) -> Result<Vec<Generation>, jsonrpc::Error> {
         OllamaAPIResponse::Error(err) => return Err(internal_error(err)),
     };
     Ok(generations)
-}
-
-fn build_openai_body(prompt: String, params: &CompletionParams) -> Value {
-    serde_json::json!({
-        "prompt": prompt,
-        "model": params.request_body.as_ref().ok_or_else(|| internal_error("missing request_body")).expect("Unable to make request for openai").get("model"),
-        "max_tokens": params.request_params.max_new_tokens,
-        "temperature": params.request_params.temperature,
-        "top_p": params.request_params.top_p,
-        "stop": params.request_params.stop_tokens.clone(),
-    })
 }
 
 fn build_openai_headers(api_token: Option<&String>, ide: Ide) -> Result<HeaderMap, jsonrpc::Error> {
@@ -206,51 +163,47 @@ fn parse_openai_text(text: &str) -> Result<Vec<Generation>, jsonrpc::Error> {
     }
 }
 
-pub(crate) const TGI: &str = "tgi";
-pub(crate) const HUGGING_FACE: &str = "huggingface";
-pub(crate) const OLLAMA: &str = "ollama";
-pub(crate) const OPENAI: &str = "openai";
-pub(crate) const DEFAULT_ADAPTOR: &str = HUGGING_FACE;
-
-fn unknown_adaptor_error(adaptor: Option<&String>) -> jsonrpc::Error {
-    internal_error(format!("Unknown adaptor {:?}", adaptor))
+#[derive(Debug, Default, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum Backend {
+    #[default]
+    HuggingFace,
+    Ollama,
+    OpenAi,
+    Tgi,
 }
 
-pub fn adapt_body(prompt: String, params: &CompletionParams) -> Result<Value, jsonrpc::Error> {
-    match params
-        .adaptor
-        .as_ref()
-        .unwrap_or(&DEFAULT_ADAPTOR.to_string())
-        .as_str()
-    {
-        TGI => Ok(build_tgi_body(prompt, &params.request_params)),
-        HUGGING_FACE => Ok(build_api_body(prompt, &params.request_params)),
-        OLLAMA => Ok(build_ollama_body(prompt, params)),
-        OPENAI => Ok(build_openai_body(prompt, params)),
-        _ => Err(unknown_adaptor_error(params.adaptor.as_ref())),
-    }
+pub fn build_body(prompt: String, params: &CompletionParams) -> Map<String, Value> {
+    let mut body = params.request_body.clone();
+    match params.backend {
+        Backend::HuggingFace | Backend::Tgi => {
+            body.insert("inputs".to_string(), Value::String(prompt))
+        }
+        Backend::Ollama | Backend::OpenAi => {
+            body.insert("prompt".to_string(), Value::String(prompt))
+        }
+    };
+    body
 }
 
-pub fn adapt_headers(
-    adaptor: Option<&String>,
+pub fn build_headers(
+    backend: &Backend,
     api_token: Option<&String>,
     ide: Ide,
 ) -> Result<HeaderMap, jsonrpc::Error> {
-    match adaptor.unwrap_or(&DEFAULT_ADAPTOR.to_string()).as_str() {
-        TGI => build_tgi_headers(api_token, ide),
-        HUGGING_FACE => build_api_headers(api_token, ide),
-        OLLAMA => build_ollama_headers(),
-        OPENAI => build_openai_headers(api_token, ide),
-        _ => Err(unknown_adaptor_error(adaptor)),
+    match backend {
+        Backend::HuggingFace => build_api_headers(api_token, ide),
+        Backend::Ollama => build_ollama_headers(),
+        Backend::OpenAi => build_openai_headers(api_token, ide),
+        Backend::Tgi => build_tgi_headers(api_token, ide),
     }
 }
 
-pub fn parse_generations(adaptor: Option<&String>, text: &str) -> jsonrpc::Result<Vec<Generation>> {
-    match adaptor.unwrap_or(&DEFAULT_ADAPTOR.to_string()).as_str() {
-        TGI => parse_tgi_text(text),
-        HUGGING_FACE => parse_api_text(text),
-        OLLAMA => parse_ollama_text(text),
-        OPENAI => parse_openai_text(text),
-        _ => Err(unknown_adaptor_error(adaptor)),
+pub fn parse_generations(backend: &Backend, text: &str) -> jsonrpc::Result<Vec<Generation>> {
+    match backend {
+        Backend::HuggingFace => parse_api_text(text),
+        Backend::Ollama => parse_ollama_text(text),
+        Backend::OpenAi => parse_openai_text(text),
+        Backend::Tgi => parse_tgi_text(text),
     }
 }
