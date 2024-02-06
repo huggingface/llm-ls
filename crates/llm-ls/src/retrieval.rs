@@ -221,16 +221,21 @@ async fn initialse_database(cache_path: PathBuf) -> Arc<dyn Table> {
                 ],
             )
             .expect("failure while defining schema");
-            db.create_table(
-                "code-slices",
-                Box::new(RecordBatchIterator::new(
-                    vec![batch].into_iter().map(Ok),
-                    schema,
-                )),
-                None,
-            )
-            .await
-            .expect("failed to create table")
+            let tbl = db
+                .create_table(
+                    "code-slices",
+                    Box::new(RecordBatchIterator::new(vec![].into_iter().map(Ok), schema)),
+                    None,
+                )
+                .await
+                .expect("failed to create table");
+            tbl.create_index(&["vector"])
+                .ivf_pq()
+                .num_partitions(256)
+                .build()
+                .await
+                .expect("failed to create index");
+            tbl
         }
         Err(err) => panic!("error while opening table: {}", err),
     }
