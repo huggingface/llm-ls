@@ -1,5 +1,3 @@
-use backend::{build_body, build_headers, parse_generations, Backend};
-use document::Document;
 use ropey::Rope;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Map, Value};
@@ -11,7 +9,7 @@ use std::time::{Duration, Instant};
 use tokenizers::Tokenizer;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::RwLock;
-use tower_lsp::jsonrpc::{Error, Result};
+use tower_lsp::jsonrpc::Result as LspResult;
 use tower_lsp::lsp_types::*;
 use tower_lsp::{Client, LanguageServer, LspService, Server};
 use tracing::{debug, error, info, info_span, warn, Instrument};
@@ -19,8 +17,13 @@ use tracing_appender::rolling;
 use tracing_subscriber::EnvFilter;
 use uuid::Uuid;
 
+use crate::backend::{build_body, build_headers, parse_generations, Backend};
+use crate::document::Document;
+use crate::error::{internal_error, Error, Result};
+
 mod backend;
 mod document;
+mod error;
 mod language_id;
 
 const MAX_WARNING_REPEAT: Duration = Duration::from_secs(3_600);
@@ -29,10 +32,10 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 const HF_INFERENCE_API_HOSTNAME: &str = "api-inference.huggingface.co";
 
 fn get_position_idx(rope: &Rope, row: usize, col: usize) -> Result<usize> {
-    Ok(rope.try_line_to_char(row).map_err(internal_error)?
+    Ok(rope.try_line_to_char(row)?
         + col.min(
             rope.get_line(row.min(rope.len_lines().saturating_sub(1)))
-                .ok_or_else(|| internal_error(format!("failed to find line at {row}")))?
+                .ok_or(Error::OutOfBoundLine(row))?
                 .len_chars()
                 .saturating_sub(1),
         ))
@@ -80,16 +83,12 @@ fn should_complete(document: &Document, position: Position) -> Result<Completion
             let mut end_offset = get_position_idx(&document.text, end.row, end.column)? - 1;
             let start_char = document
                 .text
-                .get_char(start_offset.min(document.text.len_chars() - 1))
-                .ok_or_else(|| {
-                    internal_error(format!("failed to find start char at {start_offset}"))
-                })?;
+                .get_char(start_offset.min(document.text.len_chars().saturating_sub(1)))
+                .ok_or(Error::OutOfBoundIndexing(start_offset))?;
             let end_char = document
                 .text
-                .get_char(end_offset.min(document.text.len_chars() - 1))
-                .ok_or_else(|| {
-                    internal_error(format!("failed to find end char at {end_offset}"))
-                })?;
+                .get_char(end_offset.min(document.text.len_chars().saturating_sub(1)))
+                .ok_or(Error::OutOfBoundIndexing(end_offset))?;
             if !start_char.is_whitespace() {
                 start_offset += 1;
             }
@@ -102,20 +101,13 @@ fn should_complete(document: &Document, position: Position) -> Result<Completion
             let slice = document
                 .text
                 .get_slice(start_offset..end_offset)
-                .ok_or_else(|| {
-                    internal_error(format!(
-                        "failed to find slice at {start_offset}..{end_offset}"
-                    ))
-                })?;
+                .ok_or(Error::OutOfBoundSlice(start_offset, end_offset))?;
             if slice.to_string().trim().is_empty() {
                 return Ok(CompletionType::MultiLine);
             }
         }
     }
-    let start_idx = document
-        .text
-        .try_line_to_char(row)
-        .map_err(internal_error)?;
+    let start_idx = document.text.try_line_to_char(row)?;
     // XXX: We treat the end of a document as a newline
     let next_char = document.text.get_char(start_idx + column).unwrap_or('\n');
     if next_char.is_whitespace() {
@@ -198,6 +190,12 @@ pub struct Generation {
 #[derive(Debug, Deserialize)]
 pub struct APIError {
     error: String,
+}
+
+impl std::error::Error for APIError {
+    fn description(&self) -> &str {
+        &self.error
+    }
 }
 
 impl Display for APIError {
@@ -297,16 +295,6 @@ struct CompletionResult {
     completions: Vec<Completion>,
 }
 
-pub fn internal_error<E: Display>(err: E) -> Error {
-    let err_msg = err.to_string();
-    error!(err_msg);
-    Error {
-        code: tower_lsp::jsonrpc::ErrorCode::InternalError,
-        message: err_msg.into(),
-        data: None,
-    }
-}
-
 fn build_prompt(
     pos: Position,
     text: &Rope,
@@ -335,10 +323,7 @@ fn build_prompt(
             if let Some(before_line) = before_line {
                 let before_line = before_line.to_string();
                 let tokens = if let Some(tokenizer) = tokenizer.clone() {
-                    tokenizer
-                        .encode(before_line.clone(), false)
-                        .map_err(internal_error)?
-                        .len()
+                    tokenizer.encode(before_line.clone(), false)?.len()
                 } else {
                     before_line.len()
                 };
@@ -351,10 +336,7 @@ fn build_prompt(
             if let Some(after_line) = after_line {
                 let after_line = after_line.to_string();
                 let tokens = if let Some(tokenizer) = tokenizer.clone() {
-                    tokenizer
-                        .encode(after_line.clone(), false)
-                        .map_err(internal_error)?
-                        .len()
+                    tokenizer.encode(after_line.clone(), false)?.len()
                 } else {
                     after_line.len()
                 };
@@ -390,10 +372,7 @@ fn build_prompt(
             }
             let line = line.to_string();
             let tokens = if let Some(tokenizer) = tokenizer.clone() {
-                tokenizer
-                    .encode(line.clone(), false)
-                    .map_err(internal_error)?
-                    .len()
+                tokenizer.encode(line.clone(), false)?.len()
             } else {
                 line.len()
             };
@@ -424,22 +403,18 @@ async fn request_completion(
         .json(&json)
         .headers(headers)
         .send()
-        .await
-        .map_err(internal_error)?;
+        .await?;
 
     let model = &params.model;
-    let generations = parse_generations(
-        &params.backend,
-        res.text().await.map_err(internal_error)?.as_str(),
-    );
+    let generations = parse_generations(&params.backend, res.text().await?.as_str())?;
     let time = t.elapsed().as_millis();
     info!(
         model,
         compute_generations_ms = time,
-        generations = serde_json::to_string(&generations).map_err(internal_error)?,
+        generations = serde_json::to_string(&generations)?,
         "{model} computed generations in {time} ms"
     );
-    generations
+    Ok(generations)
 }
 
 fn format_generations(
@@ -482,22 +457,19 @@ async fn download_tokenizer_file(
     if to.as_ref().exists() {
         return Ok(());
     }
-    tokio::fs::create_dir_all(
-        to.as_ref()
-            .parent()
-            .ok_or_else(|| internal_error("invalid tokenizer path"))?,
-    )
-    .await
-    .map_err(internal_error)?;
+    tokio::fs::create_dir_all(to.as_ref().parent().ok_or(Error::InvalidTokenizerPath)?).await?;
     let headers = build_headers(&Backend::HuggingFace, api_token, ide)?;
     let mut file = tokio::fs::OpenOptions::new()
         .write(true)
         .create(true)
         .open(to)
-        .await
-        .map_err(internal_error)?;
+        .await?;
     let http_client = http_client.clone();
     let url = url.to_owned();
+    // TODO:
+    // - create oneshot channel to send result of tokenizer download to display error message
+    // to user?
+    // - retry logic?
     tokio::spawn(async move {
         let res = match http_client.get(url).headers(headers).send().await {
             Ok(res) => res,
@@ -527,8 +499,7 @@ async fn download_tokenizer_file(
             }
         };
     })
-    .await
-    .map_err(internal_error)?;
+    .await?;
     Ok(())
 }
 
@@ -556,7 +527,14 @@ async fn get_tokenizer(
                 repository,
                 api_token,
             } => {
-                let path = cache_dir.as_ref().join(repository).join("tokenizer.json");
+                let (org, repo) = repository
+                    .split_once('/')
+                    .ok_or(Error::InvalidRepositoryId)?;
+                let path = cache_dir
+                    .as_ref()
+                    .join(org)
+                    .join(repo)
+                    .join("tokenizer.json");
                 let url =
                     format!("https://huggingface.co/{repository}/resolve/main/tokenizer.json");
                 download_tokenizer_file(http_client, &url, api_token.as_ref(), &path, ide).await?;
@@ -597,7 +575,7 @@ fn build_url(model: &str) -> String {
 }
 
 impl LlmService {
-    async fn get_completions(&self, params: CompletionParams) -> Result<CompletionResult> {
+    async fn get_completions(&self, params: CompletionParams) -> LspResult<CompletionResult> {
         let request_id = Uuid::new_v4();
         let span = info_span!("completion_request", %request_id);
         async move {
@@ -669,7 +647,7 @@ impl LlmService {
         }.instrument(span).await
     }
 
-    async fn accept_completion(&self, accepted: AcceptedCompletion) -> Result<()> {
+    async fn accept_completion(&self, accepted: AcceptedCompletion) -> LspResult<()> {
         info!(
             request_id = %accepted.request_id,
             accepted_position = accepted.accepted_completion,
@@ -679,7 +657,7 @@ impl LlmService {
         Ok(())
     }
 
-    async fn reject_completion(&self, rejected: RejectedCompletion) -> Result<()> {
+    async fn reject_completion(&self, rejected: RejectedCompletion) -> LspResult<()> {
         info!(
             request_id = %rejected.request_id,
             shown_completions = serde_json::to_string(&rejected.shown_completions).map_err(internal_error)?,
@@ -691,7 +669,7 @@ impl LlmService {
 
 #[tower_lsp::async_trait]
 impl LanguageServer for LlmService {
-    async fn initialize(&self, params: InitializeParams) -> Result<InitializeResult> {
+    async fn initialize(&self, params: InitializeParams) -> LspResult<InitializeResult> {
         *self.workspace_folders.write().await = params.workspace_folders;
         Ok(InitializeResult {
             server_info: Some(ServerInfo {
@@ -743,7 +721,7 @@ impl LanguageServer for LlmService {
         }
 
         // ignore the output scheme
-        if uri.starts_with("output:") {
+        if params.text_document.uri.scheme() == "output" {
             return;
         }
 
@@ -786,7 +764,7 @@ impl LanguageServer for LlmService {
         info!("{uri} closed");
     }
 
-    async fn shutdown(&self) -> Result<()> {
+    async fn shutdown(&self) -> LspResult<()> {
         debug!("shutdown");
         Ok(())
     }
