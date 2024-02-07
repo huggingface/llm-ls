@@ -979,6 +979,7 @@ dependencies = [
  "ropey",
  "serde",
  "serde_json",
+ "thiserror",
  "tokenizers",
  "tokio",
  "tower-lsp",

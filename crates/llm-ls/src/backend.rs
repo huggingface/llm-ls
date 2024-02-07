@@ -1,59 +1,44 @@
-use super::{
-    internal_error, APIError, APIResponse, CompletionParams, Generation, Ide, NAME, VERSION,
-};
+use super::{APIError, APIResponse, CompletionParams, Generation, Ide, NAME, VERSION};
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, USER_AGENT};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::fmt::Display;
-use tower_lsp::jsonrpc;
 
-fn build_tgi_headers(api_token: Option<&String>, ide: Ide) -> Result<HeaderMap, jsonrpc::Error> {
+use crate::error::{Error, Result};
+
+fn build_tgi_headers(api_token: Option<&String>, ide: Ide) -> Result<HeaderMap> {
     let mut headers = HeaderMap::new();
     let user_agent = format!("{NAME}/{VERSION}; rust/unknown; ide/{ide:?}");
-    headers.insert(
-        USER_AGENT,
-        HeaderValue::from_str(&user_agent).map_err(internal_error)?,
-    );
+    headers.insert(USER_AGENT, HeaderValue::from_str(&user_agent)?);
 
     if let Some(api_token) = api_token {
         headers.insert(
             AUTHORIZATION,
-            HeaderValue::from_str(&format!("Bearer {api_token}")).map_err(internal_error)?,
+            HeaderValue::from_str(&format!("Bearer {api_token}"))?,
         );
     }
 
     Ok(headers)
 }
 
-fn parse_tgi_text(text: &str) -> Result<Vec<Generation>, jsonrpc::Error> {
-    let generations =
-        match serde_json::from_str(text).map_err(internal_error)? {
-            APIResponse::Generation(gen) => vec![gen],
-            APIResponse::Generations(_) => {
-                return Err(internal_error(
-                    "You are attempting to parse a result in the API inference format when using the `tgi` backend",
-                ))
-            }
-            APIResponse::Error(err) => return Err(internal_error(err)),
-        };
-    Ok(generations)
+fn parse_tgi_text(text: &str) -> Result<Vec<Generation>> {
+    match serde_json::from_str(text)? {
+        APIResponse::Generation(gen) => Ok(vec![gen]),
+        APIResponse::Generations(_) => Err(Error::InvalidBackend),
+        APIResponse::Error(err) => Err(Error::Tgi(err)),
+    }
 }
 
-fn build_api_headers(api_token: Option<&String>, ide: Ide) -> Result<HeaderMap, jsonrpc::Error> {
+fn build_api_headers(api_token: Option<&String>, ide: Ide) -> Result<HeaderMap> {
     build_tgi_headers(api_token, ide)
 }
 
-fn parse_api_text(text: &str) -> Result<Vec<Generation>, jsonrpc::Error> {
-    let generations = match serde_json::from_str(text).map_err(internal_error)? {
-        APIResponse::Generation(gen) => vec![gen],
-        APIResponse::Generations(gens) => gens,
-        APIResponse::Error(err) => return Err(internal_error(err)),
-    };
-    Ok(generations)
-}
-
-fn build_ollama_headers() -> Result<HeaderMap, jsonrpc::Error> {
-    Ok(HeaderMap::new())
+fn parse_api_text(text: &str) -> Result<Vec<Generation>> {
+    match serde_json::from_str(text)? {
+        APIResponse::Generation(gen) => Ok(vec![gen]),
+        APIResponse::Generations(gens) => Ok(gens),
+        APIResponse::Error(err) => Err(Error::InferenceApi(err)),
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -76,16 +61,15 @@ enum OllamaAPIResponse {
     Error(APIError),
 }
 
-fn parse_ollama_text(text: &str) -> Result<Vec<Generation>, jsonrpc::Error> {
-    let generations = match serde_json::from_str(text).map_err(internal_error)? {
-        OllamaAPIResponse::Generation(gen) => vec![gen.into()],
-        OllamaAPIResponse::Error(err) => return Err(internal_error(err)),
-    };
-    Ok(generations)
+fn build_ollama_headers() -> HeaderMap {
+    HeaderMap::new()
 }
 
-fn build_openai_headers(api_token: Option<&String>, ide: Ide) -> Result<HeaderMap, jsonrpc::Error> {
-    build_api_headers(api_token, ide)
+fn parse_ollama_text(text: &str) -> Result<Vec<Generation>> {
+    match serde_json::from_str(text)? {
+        OllamaAPIResponse::Generation(gen) => Ok(vec![gen.into()]),
+        OllamaAPIResponse::Error(err) => Err(Error::Ollama(err)),
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -130,7 +114,7 @@ struct OpenAIErrorDetail {
 }
 
 #[derive(Debug, Deserialize)]
-struct OpenAIError {
+pub struct OpenAIError {
     detail: Vec<OpenAIErrorDetail>,
 }
 
@@ -153,13 +137,16 @@ enum OpenAIAPIResponse {
     Error(OpenAIError),
 }
 
-fn parse_openai_text(text: &str) -> Result<Vec<Generation>, jsonrpc::Error> {
-    match serde_json::from_str(text).map_err(internal_error) {
-        Ok(OpenAIAPIResponse::Generation(completion)) => {
+fn build_openai_headers(api_token: Option<&String>, ide: Ide) -> Result<HeaderMap> {
+    build_api_headers(api_token, ide)
+}
+
+fn parse_openai_text(text: &str) -> Result<Vec<Generation>> {
+    match serde_json::from_str(text)? {
+        OpenAIAPIResponse::Generation(completion) => {
             Ok(completion.choices.into_iter().map(|x| x.into()).collect())
         }
-        Ok(OpenAIAPIResponse::Error(err)) => Err(internal_error(err)),
-        Err(err) => Err(internal_error(err)),
+        OpenAIAPIResponse::Error(err) => Err(Error::OpenAI(err)),
     }
 }
 
@@ -186,20 +173,16 @@ pub fn build_body(prompt: String, params: &CompletionParams) -> Map<String, Valu
     body
 }
 
-pub fn build_headers(
-    backend: &Backend,
-    api_token: Option<&String>,
-    ide: Ide,
-) -> Result<HeaderMap, jsonrpc::Error> {
+pub fn build_headers(backend: &Backend, api_token: Option<&String>, ide: Ide) -> Result<HeaderMap> {
     match backend {
         Backend::HuggingFace => build_api_headers(api_token, ide),
-        Backend::Ollama => build_ollama_headers(),
+        Backend::Ollama => Ok(build_ollama_headers()),
         Backend::OpenAi => build_openai_headers(api_token, ide),
         Backend::Tgi => build_tgi_headers(api_token, ide),
     }
 }
 
-pub fn parse_generations(backend: &Backend, text: &str) -> jsonrpc::Result<Vec<Generation>> {
+pub fn parse_generations(backend: &Backend, text: &str) -> Result<Vec<Generation>> {
     match backend {
         Backend::HuggingFace => parse_api_text(text),
         Backend::Ollama => parse_ollama_text(text),
