@@ -428,6 +428,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "custom-types"
+version = "0.1.0"
+dependencies = [
+ "lsp-types",
+ "serde",
+ "serde_json",
+ "uuid",
+]
+
+[[package]]
 name = "darling"
 version = "0.14.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -975,6 +985,7 @@ name = "llm-ls"
 version = "0.4.0"
 dependencies = [
  "clap",
+ "custom-types",
  "home",
  "reqwest",
  "ropey",
@@ -1968,6 +1979,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "custom-types",
  "futures",
  "futures-util",
  "home",

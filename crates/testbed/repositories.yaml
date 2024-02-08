@@ -6,11 +6,12 @@ fim:
   middle: <fim_middle>
   suffix: <fim_suffix>
 model: bigcode/starcoder
-request_params:
-  maxNewTokens: 150
+backend: huggingface
+request_body:
+  max_new_tokens: 150
   temperature: 0.2
-  doSample: true
-  topP: 0.95
+  do_sample: true
+  top_p: 0.95
 tls_skip_verify_insecure: false
 tokenizer_config:
   repository: bigcode/starcoder
@@ -202,7 +203,7 @@ repositories:
       type: github
       owner: helix-editor
       name: helix
-      revision: ae6a0a9cfd377fbfa494760282498cf2ca322782
+      revision: a1272bdb17a63361342a318982e46129d558743c
       exclude_paths:
         - .cargo
         - .github
