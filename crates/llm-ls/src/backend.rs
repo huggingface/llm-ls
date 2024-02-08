@@ -1,4 +1,5 @@
-use super::{APIError, APIResponse, CompletionParams, Generation, Ide, NAME, VERSION};
+use super::{APIError, APIResponse, Generation, NAME, VERSION};
+use custom_types::llm_ls::{Backend, GetCompletionsParams, Ide};
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, USER_AGENT};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -150,17 +151,7 @@ fn parse_openai_text(text: &str) -> Result<Vec<Generation>> {
     }
 }
 
-#[derive(Debug, Default, Deserialize, Serialize)]
-#[serde(rename_all = "lowercase")]
-pub(crate) enum Backend {
-    #[default]
-    HuggingFace,
-    Ollama,
-    OpenAi,
-    Tgi,
-}
-
-pub fn build_body(prompt: String, params: &CompletionParams) -> Map<String, Value> {
+pub fn build_body(prompt: String, params: &GetCompletionsParams) -> Map<String, Value> {
     let mut body = params.request_body.clone();
     match params.backend {
         Backend::HuggingFace | Backend::Tgi => {

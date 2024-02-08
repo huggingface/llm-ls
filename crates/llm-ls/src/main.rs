@@ -1,7 +1,10 @@
 use clap::Parser;
+use custom_types::llm_ls::{
+    AcceptCompletionParams, Backend, Completion, FimParams, GetCompletionsParams,
+    GetCompletionsResult, Ide, TokenizerConfig,
+};
 use ropey::Rope;
-use serde::{Deserialize, Deserializer, Serialize};
-use serde_json::{Map, Value};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt::Display;
 use std::path::{Path, PathBuf};
@@ -19,7 +22,7 @@ use tracing_appender::rolling;
 use tracing_subscriber::EnvFilter;
 use uuid::Uuid;
 
-use crate::backend::{build_body, build_headers, parse_generations, Backend};
+use crate::backend::{build_body, build_headers, parse_generations};
 use crate::document::Document;
 use crate::error::{internal_error, Error, Result};
 
@@ -119,22 +122,6 @@ fn should_complete(document: &Document, position: Position) -> Result<Completion
     }
 }
 
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(untagged)]
-enum TokenizerConfig {
-    Local {
-        path: PathBuf,
-    },
-    HuggingFace {
-        repository: String,
-        api_token: Option<String>,
-    },
-    Download {
-        url: String,
-        to: PathBuf,
-    },
-}
-
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RequestParams {
@@ -143,14 +130,6 @@ pub struct RequestParams {
     do_sample: bool,
     top_p: f32,
     stop_tokens: Option<Vec<String>>,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-struct FimParams {
-    enabled: bool,
-    prefix: String,
-    middle: String,
-    suffix: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -223,78 +202,6 @@ struct LlmService {
     workspace_folders: Arc<RwLock<Option<Vec<WorkspaceFolder>>>>,
     tokenizer_map: Arc<RwLock<HashMap<String, Arc<Tokenizer>>>>,
     unauthenticated_warn_at: Arc<RwLock<Instant>>,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-struct Completion {
-    generated_text: String,
-}
-
-#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Ide {
-    Neovim,
-    VSCode,
-    JetBrains,
-    Emacs,
-    Jupyter,
-    Sublime,
-    VisualStudio,
-    #[default]
-    Unknown,
-}
-
-impl Display for Ide {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.serialize(f)
-    }
-}
-
-fn parse_ide<'de, D>(d: D) -> std::result::Result<Ide, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    Deserialize::deserialize(d).map(|b: Option<_>| b.unwrap_or(Ide::Unknown))
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct AcceptedCompletion {
-    request_id: Uuid,
-    accepted_completion: u32,
-    shown_completions: Vec<u32>,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct RejectedCompletion {
-    request_id: Uuid,
-    shown_completions: Vec<u32>,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct CompletionParams {
-    #[serde(flatten)]
-    text_document_position: TextDocumentPositionParams,
-    #[serde(default)]
-    #[serde(deserialize_with = "parse_ide")]
-    ide: Ide,
-    fim: FimParams,
-    api_token: Option<String>,
-    model: String,
-    backend: Backend,
-    tokens_to_clear: Vec<String>,
-    tokenizer_config: Option<TokenizerConfig>,
-    context_window: usize,
-    tls_skip_verify_insecure: bool,
-    request_body: Map<String, Value>,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-struct CompletionResult {
-    request_id: Uuid,
-    completions: Vec<Completion>,
 }
 
 fn build_prompt(
@@ -394,7 +301,7 @@ fn build_prompt(
 async fn request_completion(
     http_client: &reqwest::Client,
     prompt: String,
-    params: &CompletionParams,
+    params: &GetCompletionsParams,
 ) -> Result<Vec<Generation>> {
     let t = Instant::now();
 
@@ -577,7 +484,10 @@ fn build_url(model: &str) -> String {
 }
 
 impl LlmService {
-    async fn get_completions(&self, params: CompletionParams) -> LspResult<CompletionResult> {
+    async fn get_completions(
+        &self,
+        params: GetCompletionsParams,
+    ) -> LspResult<GetCompletionsResult> {
         let request_id = Uuid::new_v4();
         let span = info_span!("completion_request", %request_id);
         async move {
@@ -592,6 +502,7 @@ impl LlmService {
                 cursor_character = ?params.text_document_position.position.character,
                 language_id = %document.language_id,
                 model = params.model,
+                backend = %params.backend,
                 ide = %params.ide,
                 request_body = serde_json::to_string(&params.request_body).map_err(internal_error)?,
                 "received completion request for {}",
@@ -611,7 +522,7 @@ impl LlmService {
             let completion_type = should_complete(document, params.text_document_position.position)?;
             info!(%completion_type, "completion type: {completion_type:?}");
             if completion_type == CompletionType::Empty {
-                return Ok(CompletionResult { request_id, completions: vec![]});
+                return Ok(GetCompletionsResult { request_id, completions: vec![]});
             }
 
             let tokenizer = get_tokenizer(
@@ -645,11 +556,11 @@ impl LlmService {
             .await?;
 
             let completions = format_generations(result, &params.tokens_to_clear, completion_type);
-            Ok(CompletionResult { request_id, completions })
+            Ok(GetCompletionsResult { request_id, completions })
         }.instrument(span).await
     }
 
-    async fn accept_completion(&self, accepted: AcceptedCompletion) -> LspResult<()> {
+    async fn accept_completion(&self, accepted: AcceptCompletionParams) -> LspResult<()> {
         info!(
             request_id = %accepted.request_id,
             accepted_position = accepted.accepted_completion,
@@ -659,7 +570,7 @@ impl LlmService {
         Ok(())
     }
 
-    async fn reject_completion(&self, rejected: RejectedCompletion) -> LspResult<()> {
+    async fn reject_completion(&self, rejected: AcceptCompletionParams) -> LspResult<()> {
         info!(
             request_id = %rejected.request_id,
             shown_completions = serde_json::to_string(&rejected.shown_completions).map_err(internal_error)?,

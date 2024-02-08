@@ -8,6 +8,7 @@ name = "llm-ls"
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }
+custom-types = { path = "../custom-types" }
 home = "0.5"
 ropey = { version = "1.6", default-features = false, features = [
   "simd",
