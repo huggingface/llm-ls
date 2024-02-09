@@ -34,7 +34,6 @@ mod language_id;
 const MAX_WARNING_REPEAT: Duration = Duration::from_secs(3_600);
 pub const NAME: &str = "llm-ls";
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
-const HF_INFERENCE_API_HOSTNAME: &str = "api-inference.huggingface.co";
 
 fn get_position_idx(rope: &Rope, row: usize, col: usize) -> Result<usize> {
     Ok(rope.try_line_to_char(row)?
@@ -305,10 +304,15 @@ async fn request_completion(
 ) -> Result<Vec<Generation>> {
     let t = Instant::now();
 
-    let json = build_body(prompt, params);
+    let json = build_body(
+        &params.backend,
+        params.model.clone(),
+        prompt,
+        params.request_body.clone(),
+    );
     let headers = build_headers(&params.backend, params.api_token.as_ref(), params.ide)?;
     let res = http_client
-        .post(build_url(&params.model))
+        .post(build_url(params.backend.clone(), &params.model))
         .json(&json)
         .headers(headers)
         .send()
@@ -367,7 +371,7 @@ async fn download_tokenizer_file(
         return Ok(());
     }
     tokio::fs::create_dir_all(to.as_ref().parent().ok_or(Error::InvalidTokenizerPath)?).await?;
-    let headers = build_headers(&Backend::HuggingFace, api_token, ide)?;
+    let headers = build_headers(&Backend::default(), api_token, ide)?;
     let mut file = tokio::fs::OpenOptions::new()
         .write(true)
         .create(true)
@@ -475,11 +479,12 @@ async fn get_tokenizer(
     }
 }
 
-fn build_url(model: &str) -> String {
-    if model.starts_with("http://") || model.starts_with("https://") {
-        model.to_owned()
-    } else {
-        format!("https://{HF_INFERENCE_API_HOSTNAME}/models/{model}")
+fn build_url(backend: Backend, model: &str) -> String {
+    match backend {
+        Backend::HuggingFace { url } => format!("{url}/models/{model}"),
+        Backend::Ollama { url } => url,
+        Backend::OpenAi { url } => url,
+        Backend::Tgi { url } => url,
     }
 }
 
@@ -502,14 +507,13 @@ impl LlmService {
                 cursor_character = ?params.text_document_position.position.character,
                 language_id = %document.language_id,
                 model = params.model,
-                backend = %params.backend,
+                backend = ?params.backend,
                 ide = %params.ide,
                 request_body = serde_json::to_string(&params.request_body).map_err(internal_error)?,
                 "received completion request for {}",
                 params.text_document_position.text_document.uri
             );
-            let is_using_inference_api = matches!(params.backend, Backend::HuggingFace);
-            if params.api_token.is_none() && is_using_inference_api {
+            if params.api_token.is_none() && params.backend.is_using_inference_api() {
                 let now = Instant::now();
                 let unauthenticated_warn_at = self.unauthenticated_warn_at.read().await;
                 if now.duration_since(*unauthenticated_warn_at) > MAX_WARNING_REPEAT {

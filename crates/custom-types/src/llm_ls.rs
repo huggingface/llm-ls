@@ -5,6 +5,8 @@ use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Map, Value};
 use uuid::Uuid;
 
+const HF_INFERENCE_API_HOSTNAME: &str = "api-inference.huggingface.co";
+
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AcceptCompletionParams {
@@ -47,19 +49,42 @@ where
     Deserialize::deserialize(d).map(|b: Option<_>| b.unwrap_or(Ide::Unknown))
 }
 
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Backend {
-    #[default]
-    HuggingFace,
-    Ollama,
-    OpenAi,
-    Tgi,
+fn hf_default_url() -> String {
+    format!("https://{HF_INFERENCE_API_HOSTNAME}")
 }
 
-impl Display for Backend {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.serialize(f)
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase", tag = "backend")]
+pub enum Backend {
+    HuggingFace {
+        #[serde(default = "hf_default_url")]
+        url: String,
+    },
+    Ollama {
+        url: String,
+    },
+    OpenAi {
+        url: String,
+    },
+    Tgi {
+        url: String,
+    },
+}
+
+impl Default for Backend {
+    fn default() -> Self {
+        Self::HuggingFace {
+            url: hf_default_url(),
+        }
+    }
+}
+
+impl Backend {
+    pub fn is_using_inference_api(&self) -> bool {
+        match self {
+            Self::HuggingFace { url } => url.contains(HF_INFERENCE_API_HOSTNAME),
+            _ => false,
+        }
     }
 }
 
@@ -98,11 +123,13 @@ pub struct GetCompletionsParams {
     pub fim: FimParams,
     pub api_token: Option<String>,
     pub model: String,
+    #[serde(flatten)]
     pub backend: Backend,
     pub tokens_to_clear: Vec<String>,
     pub tokenizer_config: Option<TokenizerConfig>,
     pub context_window: usize,
     pub tls_skip_verify_insecure: bool,
+    #[serde(default)]
     pub request_body: Map<String, Value>,
 }
 
