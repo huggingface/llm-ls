@@ -164,6 +164,7 @@ pub fn build_body(
         Backend::Ollama { .. } | Backend::OpenAi { .. } => {
             request_body.insert("prompt".to_owned(), Value::String(prompt));
             request_body.insert("model".to_owned(), Value::String(model));
+            request_body.insert("stream".to_owned(), Value::Bool(false));
         }
     };
     request_body

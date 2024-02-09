@@ -507,7 +507,7 @@ impl LlmService {
                 cursor_character = ?params.text_document_position.position.character,
                 language_id = %document.language_id,
                 model = params.model,
-                backend = %params.backend,
+                backend = ?params.backend,
                 ide = %params.ide,
                 request_body = serde_json::to_string(&params.request_body).map_err(internal_error)?,
                 "received completion request for {}",

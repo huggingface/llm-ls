@@ -79,12 +79,6 @@ impl Default for Backend {
     }
 }
 
-impl Display for Backend {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.serialize(f)
-    }
-}
-
 impl Backend {
     pub fn is_using_inference_api(&self) -> bool {
         match self {
@@ -135,6 +129,7 @@ pub struct GetCompletionsParams {
     pub tokenizer_config: Option<TokenizerConfig>,
     pub context_window: usize,
     pub tls_skip_verify_insecure: bool,
+    #[serde(default)]
     pub request_body: Map<String, Value>,
 }
 
