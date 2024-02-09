@@ -1,5 +1,5 @@
 use super::{APIError, APIResponse, Generation, NAME, VERSION};
-use custom_types::llm_ls::{Backend, GetCompletionsParams, Ide};
+use custom_types::llm_ls::{Backend, Ide};
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, USER_AGENT};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -151,33 +151,38 @@ fn parse_openai_text(text: &str) -> Result<Vec<Generation>> {
     }
 }
 
-pub fn build_body(prompt: String, params: &GetCompletionsParams) -> Map<String, Value> {
-    let mut body = params.request_body.clone();
-    match params.backend {
-        Backend::HuggingFace | Backend::Tgi => {
-            body.insert("inputs".to_string(), Value::String(prompt))
+pub fn build_body(
+    backend: &Backend,
+    model: String,
+    prompt: String,
+    mut request_body: Map<String, Value>,
+) -> Map<String, Value> {
+    match backend {
+        Backend::HuggingFace { .. } | Backend::Tgi { .. } => {
+            request_body.insert("inputs".to_owned(), Value::String(prompt));
         }
-        Backend::Ollama | Backend::OpenAi => {
-            body.insert("prompt".to_string(), Value::String(prompt))
+        Backend::Ollama { .. } | Backend::OpenAi { .. } => {
+            request_body.insert("prompt".to_owned(), Value::String(prompt));
+            request_body.insert("model".to_owned(), Value::String(model));
         }
     };
-    body
+    request_body
 }
 
 pub fn build_headers(backend: &Backend, api_token: Option<&String>, ide: Ide) -> Result<HeaderMap> {
     match backend {
-        Backend::HuggingFace => build_api_headers(api_token, ide),
-        Backend::Ollama => Ok(build_ollama_headers()),
-        Backend::OpenAi => build_openai_headers(api_token, ide),
-        Backend::Tgi => build_tgi_headers(api_token, ide),
+        Backend::HuggingFace { .. } => build_api_headers(api_token, ide),
+        Backend::Ollama { .. } => Ok(build_ollama_headers()),
+        Backend::OpenAi { .. } => build_openai_headers(api_token, ide),
+        Backend::Tgi { .. } => build_tgi_headers(api_token, ide),
     }
 }
 
 pub fn parse_generations(backend: &Backend, text: &str) -> Result<Vec<Generation>> {
     match backend {
-        Backend::HuggingFace => parse_api_text(text),
-        Backend::Ollama => parse_ollama_text(text),
-        Backend::OpenAi => parse_openai_text(text),
-        Backend::Tgi => parse_tgi_text(text),
+        Backend::HuggingFace { .. } => parse_api_text(text),
+        Backend::Ollama { .. } => parse_ollama_text(text),
+        Backend::OpenAi { .. } => parse_openai_text(text),
+        Backend::Tgi { .. } => parse_tgi_text(text),
     }
 }
