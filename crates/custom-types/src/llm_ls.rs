@@ -46,7 +46,14 @@ fn parse_ide<'de, D>(d: D) -> std::result::Result<Ide, D::Error>
 where
     D: Deserializer<'de>,
 {
-    Deserialize::deserialize(d).map(|b: Option<_>| b.unwrap_or(Ide::Unknown))
+    Option::deserialize(d).map(|b| b.unwrap_or_default())
+}
+
+fn parse_url<'de, D>(d: D) -> std::result::Result<String, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Option::deserialize(d).map(|b| b.unwrap_or_else(hf_default_url))
 }
 
 fn hf_default_url() -> String {
@@ -57,7 +64,7 @@ fn hf_default_url() -> String {
 #[serde(rename_all = "lowercase", tag = "backend")]
 pub enum Backend {
     HuggingFace {
-        #[serde(default = "hf_default_url")]
+        #[serde(default = "hf_default_url", deserialize_with = "parse_url")]
         url: String,
     },
     // TODO:
