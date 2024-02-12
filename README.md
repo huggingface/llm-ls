@@ -27,7 +27,7 @@ Note that **llm-ls** does not export any data anywhere (other than setting a use
 
 ### Multiple backends
 
-**llm-ls** is compatible with Hugging Face's [Inference API](https://huggingface.co/docs/api-inference/en/index), Hugging Face's [text-generation-inference](https://github.com/huggingface/text-generation-inference), [ollama](https://github.com/ollama/ollama) and OpenAI compatible APIs, like [llama.cpp](https://github.com/ggerganov/llama.cpp/tree/master/examples/server).
+**llm-ls** is compatible with Hugging Face's [Inference API](https://huggingface.co/docs/api-inference/en/index), Hugging Face's [text-generation-inference](https://github.com/huggingface/text-generation-inference), [ollama](https://github.com/ollama/ollama) and OpenAI compatible APIs, like the [python llama.cpp server bindings](https://github.com/abetlen/llama-cpp-python?tab=readme-ov-file#openai-compatible-web-server).
 
 ## Compatible extensions
 

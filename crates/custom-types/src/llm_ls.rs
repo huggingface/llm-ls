@@ -60,6 +60,10 @@ pub enum Backend {
         #[serde(default = "hf_default_url")]
         url: String,
     },
+    // TODO:
+    // LlamaCpp {
+    //   url: String,
+    // },
     Ollama {
         url: String,
     },
