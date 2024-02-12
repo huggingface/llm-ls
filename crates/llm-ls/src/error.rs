@@ -3,7 +3,7 @@ use std::fmt::Display;
 use tower_lsp::jsonrpc::Error as LspError;
 use tracing::error;
 
-pub fn internal_error<E: Display>(err: E) -> LspError {
+pub(crate) fn internal_error<E: Display>(err: E) -> LspError {
     let err_msg = err.to_string();
     error!(err_msg);
     LspError {
@@ -55,7 +55,7 @@ pub enum Error {
     UnknownBackend(String),
 }
 
-pub type Result<T> = std::result::Result<T, Error>;
+pub(crate) type Result<T> = std::result::Result<T, Error>;
 
 impl From<Error> for LspError {
     fn from(err: Error) -> Self {

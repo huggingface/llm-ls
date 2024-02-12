@@ -151,7 +151,7 @@ fn parse_openai_text(text: &str) -> Result<Vec<Generation>> {
     }
 }
 
-pub fn build_body(
+pub(crate) fn build_body(
     backend: &Backend,
     model: String,
     prompt: String,
@@ -170,7 +170,11 @@ pub fn build_body(
     request_body
 }
 
-pub fn build_headers(backend: &Backend, api_token: Option<&String>, ide: Ide) -> Result<HeaderMap> {
+pub(crate) fn build_headers(
+    backend: &Backend,
+    api_token: Option<&String>,
+    ide: Ide,
+) -> Result<HeaderMap> {
     match backend {
         Backend::HuggingFace { .. } => build_api_headers(api_token, ide),
         Backend::Ollama { .. } => Ok(build_ollama_headers()),
@@ -179,7 +183,7 @@ pub fn build_headers(backend: &Backend, api_token: Option<&String>, ide: Ide) ->
     }
 }
 
-pub fn parse_generations(backend: &Backend, text: &str) -> Result<Vec<Generation>> {
+pub(crate) fn parse_generations(backend: &Backend, text: &str) -> Result<Vec<Generation>> {
     match backend {
         Backend::HuggingFace { .. } => parse_api_text(text),
         Backend::Ollama { .. } => parse_ollama_text(text),
