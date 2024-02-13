@@ -2,7 +2,7 @@ use super::{APIError, APIResponse, Generation, NAME, VERSION};
 use custom_types::llm_ls::{Backend, Ide};
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, USER_AGENT};
 use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value};
+use serde_json::{json, Map, Value};
 use std::fmt::Display;
 
 use crate::error::{Error, Result};
@@ -160,6 +160,12 @@ pub(crate) fn build_body(
     match backend {
         Backend::HuggingFace { .. } | Backend::Tgi { .. } => {
             request_body.insert("inputs".to_owned(), Value::String(prompt));
+            if let Some(Value::Object(params)) = request_body.get_mut("parameters") {
+                params.insert("return_full_text".to_owned(), Value::Bool(false));
+            } else {
+                let params = json!({ "parameters": { "return_full_text": false } });
+                request_body.insert("parameters".to_owned(), params);
+            }
         }
         Backend::Ollama { .. } | Backend::OpenAi { .. } => {
             request_body.insert("prompt".to_owned(), Value::String(prompt));
