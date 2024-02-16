@@ -73,6 +73,37 @@ fn parse_ollama_text(text: &str) -> Result<Vec<Generation>> {
     }
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+struct LlamaCppGeneration {
+    content: String,
+}
+
+impl From<LlamaCppGeneration> for Generation {
+    fn from(value: LlamaCppGeneration) -> Self {
+        Generation {
+            generated_text: value.content,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum LlamaCppAPIResponse {
+    Generation(LlamaCppGeneration),
+    Error(APIError),
+}
+
+fn build_llamacpp_headers() -> HeaderMap {
+    HeaderMap::new()
+}
+
+fn parse_llamacpp_text(text: &str) -> Result<Vec<Generation>> {
+    match serde_json::from_str(text)? {
+        LlamaCppAPIResponse::Generation(gen) => Ok(vec![gen.into()]),
+        LlamaCppAPIResponse::Error(err) => Err(Error::LlamaCpp(err)),
+    }
+}
+
 #[derive(Debug, Deserialize)]
 struct OpenAIGenerationChoice {
     text: String,
@@ -172,6 +203,15 @@ pub(crate) fn build_body(
             request_body.insert("model".to_owned(), Value::String(model));
             request_body.insert("stream".to_owned(), Value::Bool(false));
         }
+        Backend::LlamaCpp { .. } => {
+            if model.to_lowercase().contains("deepseek") {
+                request_body.insert("prompt".to_owned(), Value::String(format!("\"{}\"", prompt)));
+            } else {
+                request_body.insert("prompt".to_owned(), Value::String(prompt));
+            }
+            request_body.insert("stream".to_owned(), Value::Bool(false));
+            request_body.remove("parameters");
+        }
     };
     request_body
 }
@@ -186,6 +226,7 @@ pub(crate) fn build_headers(
         Backend::Ollama { .. } => Ok(build_ollama_headers()),
         Backend::OpenAi { .. } => build_openai_headers(api_token, ide),
         Backend::Tgi { .. } => build_tgi_headers(api_token, ide),
+        Backend::LlamaCpp { .. } => Ok(build_llamacpp_headers()),
     }
 }
 
@@ -195,5 +236,6 @@ pub(crate) fn parse_generations(backend: &Backend, text: &str) -> Result<Vec<Gen
         Backend::Ollama { .. } => parse_ollama_text(text),
         Backend::OpenAi { .. } => parse_openai_text(text),
         Backend::Tgi { .. } => parse_tgi_text(text),
+        Backend::LlamaCpp { .. } => parse_llamacpp_text(text)
     }
 }
