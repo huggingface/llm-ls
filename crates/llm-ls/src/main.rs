@@ -485,6 +485,7 @@ fn build_url(backend: Backend, model: &str) -> String {
         Backend::Ollama { url } => url,
         Backend::OpenAi { url } => url,
         Backend::Tgi { url } => url,
+        Backend::LlamaCpp { url } => url,
     }
 }
 

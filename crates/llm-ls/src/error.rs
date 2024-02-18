@@ -31,6 +31,8 @@ pub enum Error {
     InvalidTokenizerPath,
     #[error("ollama error: {0}")]
     Ollama(crate::APIError),
+     #[error("llamacpp error: {0}")]
+    LlamaCpp(crate::APIError),
     #[error("openai error: {0}")]
     OpenAI(crate::backend::OpenAIError),
     #[error("index out of bounds: {0}")]

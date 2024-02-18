@@ -67,10 +67,10 @@ pub enum Backend {
         #[serde(default = "hf_default_url", deserialize_with = "parse_url")]
         url: String,
     },
-    // TODO:
-    // LlamaCpp {
-    //   url: String,
-    // },
+ 
+    LlamaCpp {
+       url: String,
+    },
     Ollama {
         url: String,
     },
@@ -79,7 +79,7 @@ pub enum Backend {
     },
     Tgi {
         url: String,
-    },
+    }
 }
 
 impl Default for Backend {
