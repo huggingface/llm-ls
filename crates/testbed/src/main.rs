@@ -341,7 +341,7 @@ async fn copy_dir_contents(source: &Path, dest: &Path) -> anyhow::Result<()> {
                 fs::copy(&src_path, &dst_path).await?;
             } else if entry_type.is_symlink() {
                 let link_target = fs::read_link(&src_path).await?;
-                fs::symlink_file(link_target, dst_path.clone()).await?;
+                fs::symlink(link_target, dst_path.clone()).await?;
             }
         }
     }
