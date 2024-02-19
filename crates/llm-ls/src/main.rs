@@ -1,7 +1,7 @@
 use clap::Parser;
 use custom_types::llm_ls::{
     AcceptCompletionParams, Backend, Completion, FimParams, GetCompletionsParams,
-    GetCompletionsResult, Ide, TokenizerConfig,
+    GetCompletionsResult, Ide, RejectCompletionParams, TokenizerConfig,
 };
 use ropey::Rope;
 use serde::{Deserialize, Serialize};
@@ -508,7 +508,7 @@ impl LlmService {
         Ok(())
     }
 
-    async fn reject_completion(&self, rejected: AcceptCompletionParams) -> LspResult<()> {
+    async fn reject_completion(&self, rejected: RejectCompletionParams) -> LspResult<()> {
         info!(
             request_id = %rejected.request_id,
             shown_completions = serde_json::to_string(&rejected.shown_completions).map_err(internal_error)?,
