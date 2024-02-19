@@ -429,12 +429,22 @@ impl LlmService {
     ) -> LspResult<GetCompletionsResult> {
         let request_id = Uuid::new_v4();
         let span = info_span!("completion_request", %request_id);
+
         async move {
             let document_map = self.document_map.read().await;
 
-            let document = document_map
-                .get(params.text_document_position.text_document.uri.as_str())
-                .ok_or_else(|| internal_error("failed to find document"))?;
+            let document =
+                match document_map.get(params.text_document_position.text_document.uri.as_str()) {
+                    Some(doc) => doc,
+                    None => {
+                        debug!("failed to find document");
+                        return Ok(GetCompletionsResult {
+                            request_id,
+                            completions: vec![],
+                        });
+                    }
+                };
+
             info!(
                 document_url = %params.text_document_position.text_document.uri,
                 cursor_line = ?params.text_document_position.position.line,
@@ -545,6 +555,9 @@ impl LanguageServer for LlmService {
 
     async fn did_open(&self, params: DidOpenTextDocumentParams) {
         let uri = params.text_document.uri.to_string();
+        if uri == "file:///" {
+            return;
+        }
         match Document::open(
             &params.text_document.language_id,
             &params.text_document.text,
@@ -567,6 +580,9 @@ impl LanguageServer for LlmService {
 
     async fn did_change(&self, params: DidChangeTextDocumentParams) {
         let uri = params.text_document.uri.to_string();
+        if uri == "file:///" {
+            return;
+        }
         if params.content_changes.is_empty() {
             return;
         }
@@ -593,7 +609,7 @@ impl LanguageServer for LlmService {
                 }
             }
         } else {
-            warn!("textDocument/didChange {uri}: document not found");
+            debug!("textDocument/didChange {uri}: document not found");
         }
     }
 
