@@ -15,8 +15,6 @@ pub(crate) fn internal_error<E: Display>(err: E) -> LspError {
 
 #[derive(thiserror::Error, Debug)]
 pub enum Error {
-    #[error("arrow error: {0}")]
-    Arrow(#[from] arrow_schema::ArrowError),
     #[error("candle error: {0}")]
     Candle(#[from] candle::Error),
     #[error("gitignore error: {0}")]
@@ -59,8 +57,6 @@ pub enum Error {
     TokioJoin(#[from] tokio::task::JoinError),
     #[error("unknown backend: {0}")]
     UnknownBackend(String),
-    #[error("vector db error: {0}")]
-    VectorDb(#[from] vectordb::error::Error),
 }
 
 pub(crate) type Result<T> = std::result::Result<T, Error>;

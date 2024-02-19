@@ -112,10 +112,13 @@ impl Collection {
         &self,
         query: &[f32],
         k: usize,
-        filter: Option<impl FnMut(&&Embedding) -> bool>,
+        filter: Option<FilterBuilder>,
     ) -> Result<Vec<SimilarityResult>> {
         let embeddings = if let Some(filter) = filter {
-            self.embeddings.iter().filter(filter).collect::<Vec<_>>()
+            self.embeddings
+                .iter()
+                .filter(filter.build())
+                .collect::<Vec<_>>()
         } else {
             self.embeddings.iter().collect::<Vec<_>>()
         };
@@ -136,12 +139,12 @@ impl Collection {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Embedding {
     pub id: Uuid,
-    pub metadata: Option<HashMap<String, String>>,
+    pub metadata: Option<HashMap<String, Value>>,
     pub vector: Vec<f32>,
 }
 
 impl Embedding {
-    pub fn new(vector: Vec<f32>, metadata: Option<HashMap<String, String>>) -> Self {
+    pub fn new(vector: Vec<f32>, metadata: Option<HashMap<String, Value>>) -> Self {
         Self {
             id: Uuid::new_v4(),
             metadata,
@@ -150,6 +153,39 @@ impl Embedding {
     }
 }
 
+impl PartialEq for Embedding {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id
+    }
+}
+
+impl Eq for Embedding {}
+
+#[derive(Debug, Clone, PartialEq, PartialOrd, Serialize, Deserialize)]
+pub enum Value {
+    String(String),
+    Number(f32),
+}
+
+impl From<f32> for Value {
+    fn from(value: f32) -> Self {
+        Self::Number(value)
+    }
+}
+
+impl From<&str> for Value {
+    fn from(value: &str) -> Self {
+        Self::String(value.to_owned())
+    }
+}
+
+impl From<String> for Value {
+    fn from(value: String) -> Self {
+        Self::String(value)
+    }
+}
+
+#[derive(Debug)]
 pub enum Compare {
     Eq,
     Neq,
@@ -157,14 +193,14 @@ pub enum Compare {
     Lt,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 enum Chain {
     And,
     Or,
 }
 
 pub struct FilterBuilder {
-    filter: Vec<(String, Compare, String, Option<Chain>)>,
+    filter: Vec<(String, Compare, Value, Option<Chain>)>,
 }
 
 impl FilterBuilder {
@@ -173,25 +209,30 @@ impl FilterBuilder {
     }
 
     pub fn and(mut self) -> Self {
-        self.filter
-            .last_mut()
-            .map(|c| c.3.as_mut().map(|c| *c = Chain::And));
+        if let Some(c) = self.filter.last_mut() {
+            c.3 = Some(Chain::And);
+        };
         self
     }
 
     pub fn or(mut self) -> Self {
-        self.filter
-            .last_mut()
-            .map(|c| c.3.as_mut().map(|c| *c = Chain::Or));
+        if let Some(c) = self.filter.last_mut() {
+            c.3 = Some(Chain::Or);
+        }
         self
     }
 
-    pub fn condtion(mut self, lhs: String, op: Compare, rhs: String) -> Self {
-        self.filter.push((lhs, op, rhs, None));
+    pub fn comparison(mut self, key: String, op: Compare, value: Value) -> Self {
+        assert!(
+            self.filter.last().map(|c| c.3.is_some()).unwrap_or(true),
+            "Missing chain operator in filter"
+        );
+        self.filter.push((key, op, value, None));
         self
     }
 
-    pub fn build(self) -> impl Fn(&&Embedding) -> bool {
+    // XXX: we assume the user will chain filters correctly
+    fn build(self) -> impl Fn(&&Embedding) -> bool {
         move |e| {
             let mut ret = true;
             let mut prev = None;
@@ -223,6 +264,8 @@ impl FilterBuilder {
                         Chain::And => ret = ret && cond_res,
                         Chain::Or => ret = ret || cond_res,
                     }
+                } else {
+                    ret = cond_res;
                 }
                 prev = condition.3.clone();
             }
@@ -239,7 +282,7 @@ async fn get_similarity(
 ) -> Result<Vec<SimilarityResult>> {
     let semaphore = Arc::new(Semaphore::new(8));
     let mut set = JoinSet::new();
-    for (index, embedding) in embeddings.into_iter().enumerate() {
+    for (index, embedding) in embeddings.iter().enumerate() {
         let embedding = (*embedding).clone();
         let query = query.to_owned();
         let permit = semaphore.clone().acquire_owned().await.unwrap();
@@ -269,4 +312,122 @@ async fn get_similarity(
             embedding: embeddings[index].clone(),
         })
         .collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use tempfile::TempDir;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn simple_similarity() {
+        let temp_dir = TempDir::new().expect("failed to create tempt dir");
+        let db_path = temp_dir.path().join("embeddings.db");
+        let mut db = match Db::open(db_path) {
+            Ok(db) => db,
+            Err(err) => panic!("{}", err.to_string()),
+        };
+        let mut col = match db.create_collection("test".to_owned(), 5, Distance::Cosine) {
+            Ok(col) => col,
+            Err(err) => panic!("{}", err.to_string()),
+        };
+        let embedding = Embedding::new(
+            vec![0.9999695, 0.76456239, 0.86767905, 0.17577756, 0.9949882],
+            None,
+        );
+        col.insert(embedding.clone())
+            .expect("faield to insert embedding");
+
+        let expected = SimilarityResult {
+            score: 0.7449362,
+            embedding,
+        };
+        let results = col
+            .get(
+                &[0.5902804, 0.516834, 0.12403694, 0.8444756, 0.4672038],
+                1,
+                None,
+            )
+            .await
+            .expect("failed to get most similar embeddings");
+        let actual = results
+            .first()
+            .expect("missing embedding in similarity result");
+        assert!((expected.score - actual.score).abs() <= f32::EPSILON);
+        assert_eq!(expected.embedding.id, actual.embedding.id);
+    }
+
+    #[tokio::test]
+    async fn filter() {
+        let temp_dir = TempDir::new().expect("failed to create tempt dir");
+        let db_path = temp_dir.path().join("embeddings.db");
+        let mut db = match Db::open(db_path) {
+            Ok(db) => db,
+            Err(err) => panic!("{}", err.to_string()),
+        };
+        let mut col = match db.create_collection("test".to_owned(), 5, Distance::Cosine) {
+            Ok(col) => col,
+            Err(err) => panic!("{}", err.to_string()),
+        };
+        let embedding1 = Embedding::new(
+            vec![0.5880849, 0.25781349, 0.32253786, 0.80958734, 0.8591076],
+            Some(HashMap::from([
+                ("i".to_owned(), 32.0.into()),
+                ("j".to_owned(), 10.0.into()),
+            ])),
+        );
+        col.insert(embedding1.clone())
+            .expect("faield to insert embedding");
+        let embedding2 = Embedding::new(
+            vec![0.43717385, 0.21100248, 0.5068433, 0.9626808, 0.6763327],
+            Some(HashMap::from([
+                ("i".to_owned(), 7.0.into()),
+                ("j".to_owned(), 100.0.into()),
+            ])),
+        );
+        col.insert(embedding2.clone())
+            .expect("faield to insert embedding");
+        let embedding3 = Embedding::new(
+            vec![0.2630481, 0.24888718, 0.3375401, 0.92770165, 0.44944693],
+            Some(HashMap::from([
+                ("i".to_owned(), 29.0.into()),
+                ("j".to_owned(), 16.0.into()),
+            ])),
+        );
+        col.insert(embedding3.clone())
+            .expect("faield to insert embedding");
+        let embedding4 = Embedding::new(
+            vec![0.7642892, 0.47043378, 0.9035855, 0.31120034, 0.5757918],
+            Some(HashMap::from([
+                ("i".to_owned(), 3.0.into()),
+                ("j".to_owned(), 110.0.into()),
+            ])),
+        );
+        col.insert(embedding4.clone())
+            .expect("faield to insert embedding");
+
+        let results = col
+            .get(
+                &[0.09537213, 0.5104327, 0.69980987, 0.13146928, 0.30541683],
+                4,
+                Some(
+                    col.filter()
+                        .comparison("i".to_owned(), Compare::Lt, 25.0.into())
+                        .and()
+                        .comparison("j".to_owned(), Compare::Gt, 50.0.into()),
+                ),
+            )
+            .await
+            .expect("failed to get most similar embeddings");
+        let actual_scores: Vec<f32> = results.iter().map(|r| r.score).collect();
+        let expected_scores: Vec<f32> = vec![0.8701641, 0.6552329];
+        assert!(expected_scores
+            .iter()
+            .zip(actual_scores.iter())
+            .all(|(e, a)| { (e - a).abs() <= f32::EPSILON }));
+        let expected_embeddings = vec![embedding4, embedding2];
+        let actual_embeddings: Vec<Embedding> = results.into_iter().map(|r| r.embedding).collect();
+        assert_eq!(expected_embeddings, actual_embeddings);
+    }
 }

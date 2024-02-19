@@ -9,7 +9,7 @@ authors.workspace = true
 
 [dependencies]
 bincode = "1"
-serde = "1"
+serde = { version = "1", features = ["derive"] }
 thiserror = "1"
 tokio = { version = "1", features = [
   "fs",
@@ -21,4 +21,7 @@ tracing = "0.1"
 
 [dependencies.uuid]
 version = "1.7.0"
-features = ["v4", "fast-rng", "macro-diagnostics"]
+features = ["v4", "fast-rng", "macro-diagnostics", "serde"]
+
+[dev-dependencies]
+tempfile = "3"

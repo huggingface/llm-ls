@@ -7,8 +7,6 @@ edition = "2021"
 name = "llm-ls"
 
 [dependencies]
-arrow-array = "50"
-arrow-schema = "50"
 candle = { version = "0.3", package = "candle-core", default-features = false }
 candle-nn = "0.3"
 candle-transformers = "0.3"
@@ -18,7 +16,6 @@ futures-util = "0.3"
 gitignore = { path = "../gitignore" }
 hf-hub = { version = "0.3", features = ["tokio"] }
 home = "0.5"
-lance-linalg = "0.9.9"
 ropey = { version = "1.6", default-features = false, features = [
   "simd",
   "cr_lines",
@@ -67,7 +64,6 @@ tree-sitter-rust = "0.20"
 tree-sitter-scala = "0.20"
 tree-sitter-swift = "0.4"
 tree-sitter-typescript = "0.20"
-vectordb = "0.4"
 
 [dependencies.uuid]
 version = "1.4"
