@@ -45,11 +45,11 @@ jobs:
           rustflags: ''
           toolchain: nightly
 
-      - name: Install Python 3.12
+      - name: Install Python 3.10
         uses: actions/setup-python@v5
         if: matrix.repo.python
         with:
-          python-version: '3.12'
+          python-version: '3.10'
 
       - name: Install node 18
         uses: actions/setup-node@v4

@@ -39,7 +39,6 @@ repositories:
     runner_command: picklescan-venv/bin/python3
     setup_commands:
       - ["python3", ["-m", "venv", "picklescan-venv"]]
-      - ["picklescan-venv/bin/python3", ["-m", "pip", "install", "setuptools"]]
       - ["picklescan-venv/bin/python3", ["-m", "pip", "install", "."]]
       - ["picklescan-venv/bin/python3", ["-m", "pip", "install", "-r", "requirements.txt"]]
     holes_file: picklescan.json
