@@ -28,7 +28,11 @@ use serde_json::{Map, Value};
 use tempfile::TempDir;
 use tokio::{
     fs::{self, read_to_string, File, OpenOptions},
-    io::{self, AsyncReadExt, AsyncWriteExt},
+    io::{
+        self, AsyncBufRead, AsyncBufReadExt, AsyncReadExt, AsyncWriteExt,
+        BufReader as TokioBufReader,
+    },
+    join,
     process::Command,
     sync::{OnceCell, RwLock, Semaphore},
 };
@@ -401,15 +405,20 @@ async fn run_setup(
             command.0,
             command.1.join(" ")
         );
-        let status = status_cmd
+        let mut child = status_cmd
             .args(&command.1)
             .current_dir(&repo_path)
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()?
-            .wait()
-            .await?;
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()?;
 
+        if let (Some(stdout), Some(stderr)) = (child.stdout.take(), child.stderr.take()) {
+            let stdout = TokioBufReader::new(stdout);
+            let stderr = TokioBufReader::new(stderr);
+            join!(log_lines(stdout), log_lines(stderr));
+        }
+
+        let status = child.wait().await?;
         if !status.success() {
             return Err(anyhow!(
                 "error running: \"{} {}\"",
@@ -433,15 +442,29 @@ async fn build(
         status_cmd.env(name, value);
     }
     debug!("building repo: {command} {args:?}");
-    let status = status_cmd
+
+    let mut child = status_cmd
         .args(args)
         .current_dir(repo_path)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()?
-        .wait()
-        .await?;
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+
+    if let (Some(stdout), Some(stderr)) = (child.stdout.take(), child.stderr.take()) {
+        let stdout = TokioBufReader::new(stdout);
+        let stderr = TokioBufReader::new(stderr);
+        join!(log_lines(stdout), log_lines(stderr));
+    }
+
+    let status = child.wait().await?;
     Ok(status.success())
+}
+
+async fn log_lines<R: AsyncReadExt + AsyncBufRead + Unpin>(stdio: R) {
+    let mut lines = stdio.lines();
+    while let Ok(Some(log)) = lines.next_line().await {
+        debug!("{log}");
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
