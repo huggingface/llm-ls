@@ -121,75 +121,9 @@ fn should_complete(document: &Document, position: Position) -> Result<Completion
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RequestParams {
-    max_new_tokens: u32,
-    temperature: f32,
-    do_sample: bool,
-    top_p: f32,
-    stop_tokens: Option<Vec<String>>,
-}
-
-#[derive(Debug, Serialize)]
-struct APIParams {
-    max_new_tokens: u32,
-    temperature: f32,
-    do_sample: bool,
-    top_p: f32,
-    #[allow(dead_code)]
-    #[serde(skip_serializing)]
-    stop: Option<Vec<String>>,
-    return_full_text: bool,
-}
-
-impl From<RequestParams> for APIParams {
-    fn from(params: RequestParams) -> Self {
-        Self {
-            max_new_tokens: params.max_new_tokens,
-            temperature: params.temperature,
-            do_sample: params.do_sample,
-            top_p: params.top_p,
-            stop: params.stop_tokens,
-            return_full_text: false,
-        }
-    }
-}
-
-#[derive(Serialize)]
-struct APIRequest {
-    inputs: String,
-    parameters: APIParams,
-}
-
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Generation {
     generated_text: String,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct APIError {
-    error: String,
-}
-
-impl std::error::Error for APIError {
-    fn description(&self) -> &str {
-        &self.error
-    }
-}
-
-impl Display for APIError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.error)
-    }
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(untagged)]
-pub enum APIResponse {
-    Generation(Generation),
-    Generations(Vec<Generation>),
-    Error(APIError),
 }
 
 struct LlmService {
