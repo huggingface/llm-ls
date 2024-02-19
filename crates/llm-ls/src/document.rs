@@ -176,7 +176,7 @@ impl Document {
             let rope = Rope::from_str(text);
             let text_len = rope.len_chars();
             let end_idx = idx + text_len;
-            self.text.insert(idx, text);
+            self.text.try_insert(idx, text)?;
             (
                 end_idx,
                 Point {
@@ -189,7 +189,7 @@ impl Document {
                 + (range.end.character as usize);
             let slice_size = removal_idx - start_idx;
             self.text.try_remove(start_idx..removal_idx)?;
-            self.text.insert(start_idx, text);
+            self.text.try_insert(start_idx, text)?;
             let rope = Rope::from_str(text);
             let text_len = rope.len_chars();
             let character_difference = text_len as isize - slice_size as isize;

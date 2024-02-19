@@ -20,7 +20,7 @@ pub enum Error {
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
     #[error("inference api error: {0}")]
-    InferenceApi(crate::APIError),
+    InferenceApi(crate::backend::APIError),
     #[error("You are attempting to parse a result in the API inference format when using the `tgi` backend")]
     InvalidBackend,
     #[error("invalid header value: {0}")]
@@ -46,7 +46,7 @@ pub enum Error {
     #[error("serde json error: {0}")]
     SerdeJson(#[from] serde_json::Error),
     #[error("tgi error: {0}")]
-    Tgi(crate::APIError),
+    Tgi(crate::backend::APIError),
     #[error("tree-sitter language error: {0}")]
     TreeSitterLanguage(#[from] tree_sitter::LanguageError),
     #[error("tokenizer error: {0}")]

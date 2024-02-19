@@ -1,4 +1,4 @@
-use super::{APIError, APIResponse, Generation, NAME, VERSION};
+use super::{Generation, NAME, VERSION};
 use custom_types::llm_ls::{Backend, Ide};
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, USER_AGENT};
 use serde::{Deserialize, Serialize};
@@ -6,6 +6,31 @@ use serde_json::{json, Map, Value};
 use std::fmt::Display;
 
 use crate::error::{Error, Result};
+
+#[derive(Debug, Deserialize)]
+pub struct APIError {
+    error: String,
+}
+
+impl std::error::Error for APIError {
+    fn description(&self) -> &str {
+        &self.error
+    }
+}
+
+impl Display for APIError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.error)
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+pub enum APIResponse {
+    Generation(Generation),
+    Generations(Vec<Generation>),
+    Error(APIError),
+}
 
 fn build_tgi_headers(api_token: Option<&String>, ide: Ide) -> Result<HeaderMap> {
     let mut headers = HeaderMap::new();
