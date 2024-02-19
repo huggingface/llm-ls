@@ -45,14 +45,14 @@ jobs:
           rustflags: ''
           toolchain: nightly
 
-      - name: Install Python 3.10
-        uses: actions/setup-python@v4
+      - name: Install Python 3.12
+        uses: actions/setup-python@v5
         if: matrix.repo.python
         with:
-          python-version: '3.10'
+          python-version: '3.12'
 
       - name: Install node 18
-        uses: actions/setup-node@v3
+        uses: actions/setup-node@v4
         if: matrix.repo.node
         with:
           node-version: 18
@@ -63,7 +63,7 @@ jobs:
           npm i -g yarn
 
       - name: Set up cargo cache
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         continue-on-error: false
         with:
           path: |
@@ -93,7 +93,7 @@ jobs:
           LOG_LEVEL: ${{ github.run_attempt > 1 && 'debug' || 'info' }}
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v1
+        uses: actions/upload-artifact@v4
         with:
           name: results-${{ matrix.repo.key }}
           path: ./results.json
@@ -109,67 +109,67 @@ jobs:
           apt update
           apt install -y jq
 
-      - uses: actions/download-artifact@v1
+      - uses: actions/download-artifact@v4
         with:
           name: results-simple
           path: results-simple
 
-      - uses: actions/download-artifact@v1
+      - uses: actions/download-artifact@v4
         with:
           name: results-picklescan
           path: results-picklescan
 
-      - uses: actions/download-artifact@v1
+      - uses: actions/download-artifact@v4
         with:
           name: results-huggingface_hub
           path: results-huggingface_hub
 
-      - uses: actions/download-artifact@v1
+      - uses: actions/download-artifact@v4
         with:
           name: results-fastapi
           path: results-fastapi
 
-      - uses: actions/download-artifact@v1
+      - uses: actions/download-artifact@v4
         with:
           name: results-starlette
           path: results-starlette
 
-      - uses: actions/download-artifact@v1
+      - uses: actions/download-artifact@v4
         with:
           name: results-lancedb
           path: results-lancedb
 
-      - uses: actions/download-artifact@v1
+      - uses: actions/download-artifact@v4
         with:
           name: results-lance
           path: results-lance
 
-      - uses: actions/download-artifact@v1
+      - uses: actions/download-artifact@v4
         with:
           name: results-constrandom
           path: results-constrandom
 
-      - uses: actions/download-artifact@v1
+      - uses: actions/download-artifact@v4
         with:
           name: results-cached
           path: results-cached
 
-      - uses: actions/download-artifact@v1
+      - uses: actions/download-artifact@v4
         with:
           name: results-async-executor
           path: results-async-executor
 
-      - uses: actions/download-artifact@v1
+      - uses: actions/download-artifact@v4
         with:
           name: results-io-ts
           path: results-io-ts
 
-      - uses: actions/download-artifact@v1
+      - uses: actions/download-artifact@v4
         with:
           name: results-zod
           path: results-zod
 
-      - uses: actions/download-artifact@v1
+      - uses: actions/download-artifact@v4
         with:
           name: results-helix
           path: results-helix
