@@ -203,7 +203,7 @@ repositories:
       type: github
       owner: helix-editor
       name: helix
-      revision: a1272bdb17a63361342a318982e46129d558743c
+      revision: cdef4f8a701f921c29fdfe66f104a2edac7fe05c
       exclude_paths:
         - .cargo
         - .github
