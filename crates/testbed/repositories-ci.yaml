@@ -201,9 +201,9 @@ repositories:
     holes_file: zod-smol.json
   - source:
       type: github
-      owner: helix-editor
+      owner: McPatate
       name: helix
-      revision: cdef4f8a701f921c29fdfe66f104a2edac7fe05c
+      revision: 01c1ebebd813c9034059a966fae2bbc487b1a69f
       exclude_paths:
         - .cargo
         - .github
