@@ -205,7 +205,10 @@ pub(crate) fn build_body(
         }
         Backend::LlamaCpp { .. } => {
             if model.to_lowercase().contains("deepseek") {
-                request_body.insert("prompt".to_owned(), Value::String(format!("\"{}\"", prompt)));
+                request_body.insert(
+                    "prompt".to_owned(),
+                    Value::String(format!("\"{}\"", prompt)),
+                );
             } else {
                 request_body.insert("prompt".to_owned(), Value::String(prompt));
             }
@@ -236,6 +239,6 @@ pub(crate) fn parse_generations(backend: &Backend, text: &str) -> Result<Vec<Gen
         Backend::Ollama { .. } => parse_ollama_text(text),
         Backend::OpenAi { .. } => parse_openai_text(text),
         Backend::Tgi { .. } => parse_tgi_text(text),
-        Backend::LlamaCpp { .. } => parse_llamacpp_text(text)
+        Backend::LlamaCpp { .. } => parse_llamacpp_text(text),
     }
 }
