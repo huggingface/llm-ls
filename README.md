@@ -19,11 +19,15 @@ It also makes sure that you are within the context window of the model by tokeni
 
 Gathers information about requests and completions that can enable retraining.
 
-Note that **llm-ls** does not export any data anywhere (other than setting a user agent when querying the model API), everything is stored in a log file if you set the log level to `info`.
+Note that **llm-ls** does not export any data anywhere (other than setting a user agent when querying the model API), everything is stored in a log file (`~/.cache/llm_ls/llm-ls.log`) if you set the log level to `info`.
 
 ### Completion
 
 **llm-ls** parses the AST of the code to determine if completions should be multi line, single line or empty (no completion).
+
+### Multiple backends
+
+**llm-ls** is compatible with Hugging Face's [Inference API](https://huggingface.co/docs/api-inference/en/index), Hugging Face's [text-generation-inference](https://github.com/huggingface/text-generation-inference), [ollama](https://github.com/ollama/ollama) and OpenAI compatible APIs, like the [python llama.cpp server bindings](https://github.com/abetlen/llama-cpp-python?tab=readme-ov-file#openai-compatible-web-server).
 
 ## Compatible extensions
 
@@ -38,6 +42,4 @@ Note that **llm-ls** does not export any data anywhere (other than setting a use
 - add `suffix_percent` setting that determines the ratio of # of tokens for the prefix vs the suffix in the prompt
 - add context window fill percent or change context_window to `max_tokens`
 - filter bad suggestions (repetitive, same as below, etc)
-- support for ollama
-- support for llama.cpp
 - oltp traces ?

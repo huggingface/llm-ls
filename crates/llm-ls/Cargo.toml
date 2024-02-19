@@ -1,6 +1,6 @@
 [package]
 name = "llm-ls"
-version = "0.4.0"
+version = "0.5.2"
 edition = "2021"
 
 [[bin]]
@@ -13,6 +13,7 @@ candle = { version = "0.3", package = "candle-core", default-features = false }
 candle-nn = "0.3"
 candle-transformers = "0.3"
 clap = { version = "4", features = ["derive"] }
+custom-types = { path = "../custom-types" }
 futures-util = "0.3"
 gitignore = { path = "../gitignore" }
 hf-hub = { version = "0.3", features = ["tokio"] }
