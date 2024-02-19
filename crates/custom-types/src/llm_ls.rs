@@ -67,7 +67,6 @@ pub enum Backend {
         #[serde(default = "hf_default_url", deserialize_with = "parse_url")]
         url: String,
     },
-
     LlamaCpp {
         url: String,
     },
