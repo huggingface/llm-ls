@@ -198,6 +198,7 @@ struct RepositoriesConfig {
     context_window: usize,
     fim: FimParams,
     model: String,
+    #[serde(flatten)]
     backend: Backend,
     repositories: Vec<Repository>,
     tls_skip_verify_insecure: bool,
