@@ -20,7 +20,7 @@ jobs:
           - { name: tiangolo/fastapi, key: fastapi, parallel: 8, node: false, python: true }
           - { name: encode/starlette, key: starlette, parallel: 8, node: false, python: true }
           - { name: lancedb/lancedb, key: lancedb, parallel: 2, node: false, python: false }
-          - { name: lancedb/lance, key: lance, parallel: 2, node: false, python: false }
+          # - { name: lancedb/lance, key: lance, parallel: 2, node: false, python: false }
           - { name: tkaitchuck/constrandom, key: constrandom, parallel: 8, node: false, python: false }
           - { name: jaemk/cached, key: cached, parallel: 4, node: false, python: false }
           - { name: smol-rs/async-executor, key: async-executor, parallel: 4, node: false, python: false }
@@ -139,10 +139,10 @@ jobs:
           name: results-lancedb
           path: results-lancedb
 
-      - uses: actions/download-artifact@v4
-        with:
-          name: results-lance
-          path: results-lance
+      # - uses: actions/download-artifact@v4
+      #   with:
+      #     name: results-lance
+      #     path: results-lance
 
       - uses: actions/download-artifact@v4
         with:
