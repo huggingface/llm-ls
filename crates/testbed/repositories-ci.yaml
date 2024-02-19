@@ -30,7 +30,7 @@ repositories:
       type: github
       owner: mmaitre314
       name: picklescan
-      revision: 40001cd1caa9e041b1bce1b80f3707056cd8be52
+      revision: 108b06040de644c7aeb5f22d8b10dd9c5d282386
       src_path: src/picklescan
     build_command: picklescan-venv/bin/python3
     build_args: ["-m", "compileall", "-q", "."]
@@ -39,6 +39,7 @@ repositories:
     runner_command: picklescan-venv/bin/python3
     setup_commands:
       - ["python3", ["-m", "venv", "picklescan-venv"]]
+      - ["picklescan-venv/bin/python3", ["-m", "pip", "install", "setuptools"]]
       - ["picklescan-venv/bin/python3", ["-m", "pip", "install", "."]]
       - ["picklescan-venv/bin/python3", ["-m", "pip", "install", "-r", "requirements.txt"]]
     holes_file: picklescan-smol.json
