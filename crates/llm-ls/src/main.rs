@@ -534,6 +534,14 @@ impl LlmService {
         );
         Ok(())
     }
+
+    fn ignore_file(&self, uri: Url) -> bool {
+        let uri_str = uri.to_string();
+        let path = uri.path();
+        uri.scheme() == "output"
+            || uri.scheme() == "term"
+            || uri.scheme() == "file" && (uri_str == "file:///" || !Path::new(&path).exists())
+    }
 }
 
 #[tower_lsp::async_trait]
@@ -644,9 +652,10 @@ impl LanguageServer for LlmService {
 
     async fn did_open(&self, params: DidOpenTextDocumentParams) {
         let uri = params.text_document.uri.to_string();
-        if uri == "file:///" {
+        if self.ignore_file(params.text_document.uri) {
             return;
         }
+
         match Document::open(
             &params.text_document.language_id,
             &params.text_document.text,
@@ -669,15 +678,8 @@ impl LanguageServer for LlmService {
 
     async fn did_change(&self, params: DidChangeTextDocumentParams) {
         let uri = params.text_document.uri.to_string();
-        if params.text_document.uri.scheme() == "file" && Path::new(&uri).exists() {
-            return;
-        }
-        if params.content_changes.is_empty() {
-            return;
-        }
-
-        // ignore the output scheme
-        if params.text_document.uri.scheme() == "output" {
+        let path = params.text_document.uri.path();
+        if self.ignore_file(params.text_document.uri.clone()) {
             return;
         }
 
@@ -697,7 +699,7 @@ impl LanguageServer for LlmService {
                                 .write()
                                 .await
                                 .remove(
-                                    uri.clone(),
+                                    path.to_owned(),
                                     Range::new(start, Position::new(old_end as u32, 0)),
                                 )
                                 .await
@@ -709,7 +711,7 @@ impl LanguageServer for LlmService {
                                 .write()
                                 .await
                                 .update_document(
-                                    uri.clone(),
+                                    path.to_owned(),
                                     Range::new(start, Position::new(new_end as u32, 0)),
                                 )
                                 .await
