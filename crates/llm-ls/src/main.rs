@@ -669,7 +669,7 @@ impl LanguageServer for LlmService {
 
     async fn did_change(&self, params: DidChangeTextDocumentParams) {
         let uri = params.text_document.uri.to_string();
-        if uri == "file:///" {
+        if params.text_document.uri.scheme() == "file" && Path::new(&uri).exists() {
             return;
         }
         if params.content_changes.is_empty() {
@@ -689,9 +689,35 @@ impl LanguageServer for LlmService {
         if let Some(doc) = doc {
             for change in &params.content_changes {
                 if let Some(range) = change.range {
-                    // TODO: self.snippet_retriever.write().await.update_document(uri).await?;
                     match doc.change(range, &change.text).await {
-                        Ok(()) => info!("{uri} changed"),
+                        Ok((start, old_end, new_end)) => {
+                            let start = Position::new(start as u32, 0);
+                            if let Err(err) = self
+                                .snippet_retriever
+                                .write()
+                                .await
+                                .remove(
+                                    uri.clone(),
+                                    Range::new(start, Position::new(old_end as u32, 0)),
+                                )
+                                .await
+                            {
+                                error!("error while removing embeddings: {err}");
+                            }
+                            if let Err(err) = self
+                                .snippet_retriever
+                                .write()
+                                .await
+                                .update_document(
+                                    uri.clone(),
+                                    Range::new(start, Position::new(new_end as u32, 0)),
+                                )
+                                .await
+                            {
+                                error!("error while updating embeddings: {err}");
+                            }
+                            info!("{uri} changed");
+                        }
                         Err(err) => error!("error when changing {uri}: {err}"),
                     }
                 } else {
@@ -725,6 +751,12 @@ impl LanguageServer for LlmService {
         debug!("shutdown");
         self.cancel_snippet_build_tx
             .send(())
+            .await
+            .map_err(internal_error)?;
+        self.snippet_retriever
+            .read()
+            .await
+            .stop()
             .await
             .map_err(internal_error)?;
         Ok(())

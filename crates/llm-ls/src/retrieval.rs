@@ -1,15 +1,15 @@
-use crate::error::Result;
+use crate::error::{Error, Result};
 use candle::utils::{cuda_is_available, metal_is_available};
 use candle::{Device, Tensor};
 use candle_nn::VarBuilder;
 use candle_transformers::models::bert::{BertModel, Config, DTYPE};
-use futures_util::StreamExt;
 use gitignore::Gitignore;
 use hf_hub::{api::tokio::Api, Repo, RepoType};
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::path::Path;
 use std::{path::PathBuf, sync::Arc};
-use tinyvec_embed::db::Db;
+use tinyvec_embed::db::{Collection, Compare, Db, Embedding, FilterBuilder, SimilarityResult};
+use tinyvec_embed::similarity::Distance;
 use tokenizers::Tokenizer;
 use tokio::io::AsyncReadExt;
 use tokio::task::spawn_blocking;
@@ -65,7 +65,6 @@ fn is_code_file(file_name: &Path) -> bool {
         "json",
         "yaml",
         "yml",
-        "ini",
         "toml",
         "cfg",
         "conf",
@@ -154,11 +153,16 @@ async fn build_model_and_tokenizer() -> Result<(BertModel, Tokenizer)> {
     };
     let config = tokio::fs::read_to_string(config_filename).await?;
     let config: Config = serde_json::from_str(&config)?;
-    let tokenizer = Tokenizer::from_file(tokenizer_filename)?;
+    let mut tokenizer: Tokenizer = Tokenizer::from_file(tokenizer_filename)?;
+    tokenizer.with_padding(None);
+    tokenizer.with_truncation(None)?;
 
     let vb = VarBuilder::from_pth(&weights_filename, DTYPE, &device)?;
     let model = BertModel::load(vb, &config)?;
-    debug!("loaded model in {:.2?}", start.elapsed());
+    debug!(
+        "loaded model and tokenizer in {} ms",
+        start.elapsed().as_millis()
+    );
     Ok((model, tokenizer))
 }
 
@@ -182,64 +186,50 @@ fn device(cpu: bool) -> Result<Device> {
     }
 }
 
-async fn initialse_database(cache_path: PathBuf) -> Arc<Db> {
+async fn initialse_database(cache_path: PathBuf) -> Db {
     let uri = cache_path.join("database");
-    let db = Db::open(uri.to_str().expect("path should be utf8"))
-        .await
-        .expect("failed to open database");
+    let mut db = Db::open(uri).await.expect("failed to open database");
     match db
-        .open_table_with_params("code-slices", ReadParams::default())
+        .create_collection("code-slices".to_owned(), 768, Distance::Cosine)
         .await
     {
-        Ok(table) => table,
-        Err(vectordb::error::Error::TableNotFound { .. }) => {
-            let schema = Arc::new(Schema::new(vec![
-                Field::new(
-                    "vector",
-                    DataType::FixedSizeList(
-                        Arc::new(Field::new("item", DataType::Float32, true)),
-                        768,
-                    ),
-                    false,
-                ),
-                Field::new("content", DataType::Utf8, false),
-                Field::new("file_url", DataType::Utf8, false),
-                Field::new("start_line_no", DataType::UInt32, false),
-                Field::new("end_line_no", DataType::UInt32, false),
-            ]));
-            let batch = RecordBatch::try_new(
-                schema.clone(),
-                vec![
-                    Arc::new(FixedSizeListBuilder::new(Float32Builder::new(), 768).finish()),
-                    Arc::new(StringArray::from(Vec::<&str>::new())),
-                    Arc::new(StringArray::from(Vec::<&str>::new())),
-                    Arc::new(UInt32Array::from(Vec::<u32>::new())),
-                    Arc::new(UInt32Array::from(Vec::<u32>::new())),
-                ],
-            )
-            .expect("failure while defining schema");
-            let tbl = db
-                .create_table(
-                    "code-slices",
-                    Box::new(RecordBatchIterator::new(vec![].into_iter().map(Ok), schema)),
-                    None,
-                )
-                .await
-                .expect("failed to create table");
-            tbl.create_index(&["vector"])
-                .ivf_pq()
-                .num_partitions(256)
-                .build()
-                .await
-                .expect("failed to create index");
-            tbl
-        }
-        Err(err) => panic!("error while opening table: {}", err),
+        Ok(_)
+        | Err(tinyvec_embed::error::Error::Collection(
+            tinyvec_embed::error::Collection::UniqueViolation,
+        )) => (),
+        Err(err) => panic!("failed to create collection: {err}"),
+    }
+    db
+}
+
+pub(crate) struct Snippet {
+    file_url: String,
+    code: String,
+}
+
+impl TryFrom<&SimilarityResult> for Snippet {
+    type Error = Error;
+
+    fn try_from(value: &SimilarityResult) -> Result<Self> {
+        let meta = value
+            .embedding
+            .metadata
+            .as_ref()
+            .ok_or(Error::MissingMetadata)?;
+        let file_url = meta
+            .get("file_url")
+            .ok_or_else(|| Error::MalformattedEmbeddingMetadata("file_url".to_owned()))?
+            .inner_string()?;
+        let code = meta
+            .get("snippet")
+            .ok_or_else(|| Error::MalformattedEmbeddingMetadata("snippet".to_owned()))?
+            .inner_string()?;
+        Ok(Snippet { file_url, code })
     }
 }
 
 pub(crate) struct SnippetRetriever {
-    db: Arc<Db>,
+    db: Db,
     model: Arc<BertModel>,
     tokenizer: Tokenizer,
     window_size: usize,
@@ -288,7 +278,7 @@ impl SnippetRetriever {
             })
             .await;
         let mut stack = VecDeque::new();
-        stack.push_back(workspace_root);
+        stack.push_back(workspace_root.clone());
         while let Some(src) = stack.pop_back() {
             let mut entries = tokio::fs::read_dir(&src).await?;
             while let Some(entry) = entries.next_entry().await? {
@@ -320,7 +310,13 @@ impl SnippetRetriever {
                     token: token.clone(),
                     value: ProgressParamsValue::WorkDone(WorkDoneProgress::Report(
                         WorkDoneProgressReport {
-                            message: Some(format!("({i}/{}) done", files.len())),
+                            message: Some(format!(
+                                "{i}/{} ({})",
+                                files.len(),
+                                file.strip_prefix(workspace_root.as_path())?
+                                    .to_str()
+                                    .expect("expect file name to be valid unicode")
+                            )),
                             ..Default::default()
                         },
                     )),
@@ -331,23 +327,122 @@ impl SnippetRetriever {
         Ok(())
     }
 
-    pub(crate) async fn add_document(&mut self, file_url: String) -> Result<()> {
+    pub(crate) async fn add_document(&self, file_url: String) -> Result<()> {
+        self.build_and_add_snippets(file_url, 0, None).await?;
+        Ok(())
+    }
+
+    pub(crate) async fn update_document(&mut self, file_url: String, range: Range) -> Result<()> {
+        self.build_and_add_snippets(
+            file_url,
+            range.start.line as usize,
+            Some(range.end.line as usize),
+        )
+        .await?;
+        Ok(())
+    }
+
+    pub(crate) async fn search(
+        &self,
+        snippet: String,
+        filter: Option<FilterBuilder>,
+    ) -> Result<Vec<Snippet>> {
+        let col = self.db.get_collection("code-slices").await?;
+        let query = self
+            .generate_embedding(self.model.clone(), snippet, self.tokenizer.clone())
+            .await?;
+        let result = col
+            .read()
+            .await
+            .get(&query, 5, filter)
+            .await?
+            .iter()
+            .map(TryInto::try_into)
+            .collect::<Result<Vec<_>>>()?;
+        Ok(result)
+    }
+
+    pub(crate) async fn stop(&self) -> Result<()> {
+        self.db.save().await?;
+        Ok(())
+    }
+
+    pub(crate) async fn remove(&self, file_url: String, range: Range) -> Result<()> {
+        let col = self.db.get_collection("code-slices").await?;
+        col.write().await.remove(Some(
+            Collection::filter()
+                .comparison(
+                    "start_line_no".to_owned(),
+                    Compare::GtEq,
+                    range.start.line.into(),
+                )
+                .and()
+                .comparison(
+                    "end_line_no".to_owned(),
+                    Compare::LtEq,
+                    range.end.line.into(),
+                )
+                .and()
+                .comparison("file_url".to_owned(), Compare::Eq, file_url.into()),
+        ))?;
+        Ok(())
+    }
+}
+
+impl SnippetRetriever {
+    async fn generate_embedding(
+        &self,
+        model: Arc<BertModel>,
+        snippet: String,
+        tokenizer: Tokenizer,
+    ) -> Result<Vec<f32>> {
+        let start = Instant::now();
+        let embedding = spawn_blocking(move || -> Result<Vec<f32>> {
+            let tokens = tokenizer.encode(snippet, true)?.get_ids().to_vec();
+            let token_ids = Tensor::new(&tokens[..], &model.device)?.unsqueeze(0)?;
+            let token_type_ids = token_ids.zeros_like()?;
+            let embedding = model.forward(&token_ids, &token_type_ids)?;
+            let (_n_sentence, n_tokens, _hidden_size) = embedding.dims3()?;
+            let embedding = (embedding.sum(1)? / (n_tokens as f64))?;
+            let embedding = embedding.get(0)?.to_vec1::<f32>()?;
+            Ok(embedding)
+        })
+        .await?;
+        debug!("embedding generated in {}", start.elapsed().as_millis());
+        embedding
+    }
+
+    async fn build_and_add_snippets(
+        &self,
+        file_url: String,
+        start: usize,
+        end: Option<usize>,
+    ) -> Result<()> {
+        let col = self.db.get_collection("code-slices").await?;
         let file = tokio::fs::read_to_string(&file_url).await?;
         let lines = file.split('\n').collect::<Vec<_>>();
-        let mut embeddings = FixedSizeListBuilder::new(Float32Builder::new(), 768);
-        let mut snippets = Vec::new();
-        let mut file_urls = Vec::new();
-        let mut start_line_no = Vec::new();
-        let mut end_line_no = Vec::new();
-        for start_line in (0..lines.len()).step_by(self.window_step) {
+        let end = end.unwrap_or(lines.len()).min(lines.len());
+        for start_line in (start..end).step_by(self.window_step) {
             let end_line = (start_line + self.window_size - 1).min(lines.len());
-            if self
-                .exists(format!(
-                    "file_url = '{file_url}' AND start_line_no = {start_line} AND end_line_no = {end_line}"
-                ))
+            if !col
+                .read()
+                .await
+                .get(
+                    &[],
+                    1,
+                    Some(
+                        Collection::filter()
+                            .comparison("file_url".to_owned(), Compare::Eq, file_url.clone().into())
+                            .and()
+                            .comparison("start_line_no".to_owned(), Compare::Eq, start_line.into())
+                            .and()
+                            .comparison("end_line_no".to_owned(), Compare::Eq, end_line.into()),
+                    ),
+                )
                 .await?
+                .is_empty()
             {
-                info!("snippet {file_url}[{start_line}, {end_line}] already indexed");
+                debug!("snippet {file_url}[{start_line}, {end_line}] already indexed");
                 continue;
             }
             let window = lines[start_line..end_line].to_vec();
@@ -356,27 +451,15 @@ impl SnippetRetriever {
                 continue;
             }
             if snippet.len() > 1024 {
-                warn!("snippet {file_url}[{start_line}, {end_line}] is too big to be indexed");
+                debug!("snippet {file_url}[{start_line}, {end_line}] is too big to be indexed");
                 continue;
             }
-            let tokenizer = self
-                .tokenizer
-                .with_padding(None)
-                .with_truncation(None)?
-                .clone();
             let model = self.model.clone();
             let snippet_clone = snippet.clone();
-            let result = spawn_blocking(move || -> Result<Vec<f32>> {
-                let tokens = tokenizer.encode(snippet_clone, true)?.get_ids().to_vec();
-                let token_ids = Tensor::new(&tokens[..], &model.device)?.unsqueeze(0)?;
-                let token_type_ids = token_ids.zeros_like()?;
-                let embedding = model.forward(&token_ids, &token_type_ids)?;
-                let (_n_sentence, n_tokens, _hidden_size) = embedding.dims3()?;
-                let embedding = (embedding.sum(1)? / (n_tokens as f64))?;
-                let embedding = embedding.get(0)?.to_vec1::<f32>()?;
-                Ok(embedding)
-            })
-            .await?;
+            let tokenizer = self.tokenizer.clone();
+            let result = self
+                .generate_embedding(model, snippet_clone, tokenizer)
+                .await;
             let embedding = match result {
                 Ok(e) => e,
                 Err(err) => {
@@ -386,70 +469,16 @@ impl SnippetRetriever {
                     continue;
                 }
             };
-            embeddings.values().append_slice(&embedding);
-            embeddings.append(true);
-            snippets.push(snippet.clone());
-            file_urls.push(file_url.clone());
-            start_line_no.push(start_line as u32);
-            end_line_no.push(end_line as u32);
+            col.write().await.insert(Embedding::new(
+                embedding,
+                Some(HashMap::from([
+                    ("file_url".to_owned(), file_url.clone().into()),
+                    ("start_line_no".to_owned(), start_line.into()),
+                    ("end_line_no".to_owned(), end_line.into()),
+                    ("snippet".to_owned(), snippet.clone().into()),
+                ])),
+            ))?;
         }
-
-        let batch = RecordBatch::try_new(
-            self.db.schema(),
-            vec![
-                Arc::new(embeddings.finish()),
-                Arc::new(StringArray::from(snippets)),
-                Arc::new(StringArray::from(file_urls)),
-                Arc::new(UInt32Array::from(start_line_no)),
-                Arc::new(UInt32Array::from(end_line_no)),
-            ],
-        )?;
-        self.db
-            .add(
-                Box::new(RecordBatchIterator::new(
-                    vec![batch].into_iter().map(Ok),
-                    self.db.schema(),
-                )),
-                None,
-            )
-            .await?;
         Ok(())
-    }
-
-    pub(crate) async fn update_document(&mut self, file_url: String, range: Range) {
-        // TODO:
-        // - delete elements matching Range
-        //   - keep the smallest start line to create new windows from
-        // - build new windows based on range
-        // - insert them into table
-    }
-
-    pub(crate) async fn exists(&self, filter: String) -> Result<bool> {
-        let mut results = self
-            .db
-            .search(&[0.])
-            .metric_type(Distance::Cosine)
-            .filter(&filter)
-            .execute_stream()
-            .await?;
-        let exists = if let Some(record_batch) = results.next().await {
-            let record_batch = record_batch.map_err(Into::<Error>::into)?;
-            if record_batch.num_rows() > 0 {
-                true
-            } else {
-                info!("record batch: {record_batch:?}");
-                false
-            }
-        } else {
-            false
-        };
-        if !exists {
-            info!("filter: {filter}");
-        }
-        Ok(exists)
-    }
-
-    pub(crate) async fn search(&self, snippet: String, filter: &str) -> Result<String> {
-        Ok("toto".to_string())
     }
 }

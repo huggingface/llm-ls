@@ -1,9 +1,13 @@
 use std::path::PathBuf;
 
+use crate::db::Value;
+
 #[derive(Debug, thiserror::Error)]
 pub enum Collection {
     #[error("The dimension of the vector doesn't match the dimension of the collection")]
     DimensionMismatch,
+    #[error("attempt to peek an empty binary heap")]
+    EmptyBinaryHeap,
     #[error("invalid path: {0}")]
     InvalidPath(PathBuf),
     #[error("join error: {0}")]
@@ -18,6 +22,8 @@ pub enum Collection {
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
+    #[error("acquire error: {0}")]
+    Acquire(#[from] tokio::sync::AcquireError),
     #[error("bincode error: {0}")]
     Bincode(#[from] bincode::Error),
     #[error("collection error: {0}")]
@@ -26,6 +32,8 @@ pub enum Error {
     InvalidFileName,
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
+    #[error("expected value to be string, got: {0}")]
+    ValueNotString(Value),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

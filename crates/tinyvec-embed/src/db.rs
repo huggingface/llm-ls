@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BinaryHeap, HashMap},
+    fmt::Display,
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -123,13 +124,13 @@ impl Db {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SimilarityResult {
-    score: f32,
-    embedding: Embedding,
+    pub score: f32,
+    pub embedding: Embedding,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct Collection {
     /// Dimension of the vectors in the collection
     pub dimension: usize,
@@ -154,7 +155,7 @@ impl Collection {
         let embeddings = if let Some(filter) = filter {
             self.embeddings
                 .iter()
-                .filter(filter.build())
+                .filter(filter.fn_ref_closure())
                 .collect::<Vec<_>>()
         } else {
             self.embeddings.iter().collect::<Vec<_>>()
@@ -172,6 +173,19 @@ impl Collection {
         Ok(())
     }
 
+    /// Remove values matching filter.
+    ///
+    /// Empties the collection when `filter` is `None`.
+    pub fn remove(&mut self, filter: Option<FilterBuilder>) -> Result<()> {
+        if let Some(filter) = filter {
+            let mut closure = filter.fn_mut_closure();
+            self.embeddings.retain(|e| !closure(e));
+        } else {
+            self.embeddings.clear();
+        }
+        Ok(())
+    }
+
     pub fn len(&self) -> usize {
         self.embeddings.len()
     }
@@ -181,7 +195,7 @@ impl Collection {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Embedding {
     pub id: Uuid,
     pub metadata: Option<HashMap<String, Value>>,
@@ -206,10 +220,40 @@ impl PartialEq for Embedding {
 
 impl Eq for Embedding {}
 
-#[derive(Debug, Clone, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub enum Value {
     String(String),
     Number(f32),
+}
+
+impl Display for Value {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::String(s) => write!(f, "{s}"),
+            Self::Number(n) => write!(f, "{n}"),
+        }
+    }
+}
+
+impl Value {
+    pub fn inner_string(&self) -> Result<String> {
+        match self {
+            Self::String(s) => Ok(s.to_owned()),
+            _ => Err(Error::ValueNotString(self.to_owned())),
+        }
+    }
+}
+
+impl From<usize> for Value {
+    fn from(value: usize) -> Self {
+        Self::Number(value as f32)
+    }
+}
+
+impl From<u32> for Value {
+    fn from(value: u32) -> Self {
+        Self::Number(value as f32)
+    }
 }
 
 impl From<f32> for Value {
@@ -235,7 +279,9 @@ pub enum Compare {
     Eq,
     Neq,
     Gt,
+    GtEq,
     Lt,
+    LtEq,
 }
 
 #[derive(Clone, Debug)]
@@ -276,8 +322,7 @@ impl FilterBuilder {
         self
     }
 
-    // XXX: we assume the user will chain filters correctly
-    fn build(self) -> impl Fn(&&Embedding) -> bool {
+    fn fn_mut_closure(self) -> impl FnMut(&Embedding) -> bool {
         move |e| {
             let mut ret = true;
             let mut prev = None;
@@ -298,10 +343,72 @@ impl FilterBuilder {
                         .as_ref()
                         .map(|f| f.get(&condition.0) > Some(&condition.2))
                         .unwrap_or(false),
+                    Compare::GtEq => e
+                        .metadata
+                        .as_ref()
+                        .map(|f| f.get(&condition.0) >= Some(&condition.2))
+                        .unwrap_or(false),
                     Compare::Lt => e
                         .metadata
                         .as_ref()
                         .map(|f| f.get(&condition.0) < Some(&condition.2))
+                        .unwrap_or(false),
+                    Compare::LtEq => e
+                        .metadata
+                        .as_ref()
+                        .map(|f| f.get(&condition.0) <= Some(&condition.2))
+                        .unwrap_or(false),
+                };
+                if let Some(prev) = prev {
+                    match prev {
+                        Chain::And => ret = ret && cond_res,
+                        Chain::Or => ret = ret || cond_res,
+                    }
+                } else {
+                    ret = cond_res;
+                }
+                prev = condition.3.clone();
+            }
+            ret
+        }
+    }
+
+    // XXX: we assume the user will chain filters correctly
+    fn fn_ref_closure(self) -> impl Fn(&&Embedding) -> bool {
+        move |e| {
+            let mut ret = true;
+            let mut prev = None;
+            for condition in &self.filter {
+                let cond_res = match condition.1 {
+                    Compare::Eq => e
+                        .metadata
+                        .as_ref()
+                        .map(|f| f.get(&condition.0) == Some(&condition.2))
+                        .unwrap_or(false),
+                    Compare::Neq => e
+                        .metadata
+                        .as_ref()
+                        .map(|f| f.get(&condition.0) != Some(&condition.2))
+                        .unwrap_or(false),
+                    Compare::Gt => e
+                        .metadata
+                        .as_ref()
+                        .map(|f| f.get(&condition.0) > Some(&condition.2))
+                        .unwrap_or(false),
+                    Compare::GtEq => e
+                        .metadata
+                        .as_ref()
+                        .map(|f| f.get(&condition.0) >= Some(&condition.2))
+                        .unwrap_or(false),
+                    Compare::Lt => e
+                        .metadata
+                        .as_ref()
+                        .map(|f| f.get(&condition.0) < Some(&condition.2))
+                        .unwrap_or(false),
+                    Compare::LtEq => e
+                        .metadata
+                        .as_ref()
+                        .map(|f| f.get(&condition.0) <= Some(&condition.2))
                         .unwrap_or(false),
                 };
                 if let Some(prev) = prev {
@@ -336,7 +443,7 @@ async fn get_similarity(
     for (index, embedding) in embeddings.iter().enumerate() {
         let embedding = (*embedding).clone();
         let query = query.to_owned();
-        let permit = semaphore.clone().acquire_owned().await.unwrap();
+        let permit = semaphore.clone().acquire_owned().await?;
         set.spawn_blocking(move || {
             let score = distance.compute(&embedding.vector, &query);
             drop(permit);
@@ -347,7 +454,7 @@ async fn get_similarity(
     let mut heap = BinaryHeap::new();
     while let Some(res) = set.join_next().await {
         let score_index = res.map_err(Into::<CollectionError>::into)?;
-        if heap.len() < k || score_index < *heap.peek().unwrap() {
+        if heap.len() < k || score_index < *heap.peek().ok_or(CollectionError::EmptyBinaryHeap)? {
             heap.push(score_index);
 
             if heap.len() > k {
