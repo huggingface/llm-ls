@@ -140,7 +140,7 @@ fn is_code_file(file_name: &Path) -> bool {
 async fn build_model_and_tokenizer() -> Result<(BertModel, Tokenizer)> {
     let start = Instant::now();
     let device = device(false)?;
-    let model_id = "bigcode/starencoder".to_string();
+    let model_id = "intfloat/multilingual-e5-small".to_string();
     let revision = "main".to_string();
     let repo = Repo::with_revision(model_id, RepoType::Model, revision);
     let (config_filename, tokenizer_filename, weights_filename) = {
@@ -190,7 +190,7 @@ async fn initialse_database(cache_path: PathBuf) -> Db {
     let uri = cache_path.join("database");
     let mut db = Db::open(uri).await.expect("failed to open database");
     match db
-        .create_collection("code-slices".to_owned(), 768, Distance::Cosine)
+        .create_collection("code-slices".to_owned(), 384, Distance::Cosine)
         .await
     {
         Ok(_)
@@ -303,7 +303,7 @@ impl SnippetRetriever {
             }
         }
         for (i, file) in files.iter().enumerate() {
-            let file_url = file.to_str().expect("file path should be utf8").to_string();
+            let file_url = file.to_str().expect("file path should be utf8").to_owned();
             self.add_document(file_url).await?;
             client
                 .send_notification::<Progress>(ProgressParams {
@@ -408,7 +408,7 @@ impl SnippetRetriever {
             Ok(embedding)
         })
         .await?;
-        debug!("embedding generated in {}", start.elapsed().as_millis());
+        debug!("embedding generated in {} ms", start.elapsed().as_millis());
         embedding
     }
 
