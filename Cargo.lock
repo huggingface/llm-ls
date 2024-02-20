@@ -1350,6 +1350,7 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror",
+ "tinyvec-embed",
  "tokenizers",
  "tokio",
  "tower-lsp",

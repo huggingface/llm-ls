@@ -1,88 +1,125 @@
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BinaryHeap, HashMap},
-    fs,
     path::{Path, PathBuf},
     sync::Arc,
 };
-use tokio::{sync::Semaphore, task::JoinSet};
+use tokio::{
+    fs,
+    sync::{RwLock, Semaphore},
+    task::JoinSet,
+};
 use tracing::debug;
 use uuid::Uuid;
 
 use crate::{
-    error::{Collection as Error, Result},
+    error::{Collection as CollectionError, Error, Result},
     similarity::{Distance, ScoreIndex},
 };
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug)]
 pub struct Db {
-    pub collections: HashMap<String, Collection>,
-    pub location: PathBuf,
+    inner: Arc<RwLock<DbInner>>,
+}
+
+#[derive(Clone, Debug)]
+pub struct DbInner {
+    collections: HashMap<String, Arc<RwLock<Collection>>>,
+    location: PathBuf,
 }
 
 impl Db {
-    pub fn open(path: impl AsRef<Path>) -> Result<Self> {
+    /// Opens a database from disk or creates a new one if it doesn't exist
+    pub async fn open(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref();
+        let mut inner = DbInner {
+            collections: HashMap::new(),
+            location: path.to_path_buf(),
+        };
         if !path.exists() {
             debug!("Creating database store");
-            fs::create_dir_all(
-                path.parent()
-                    .ok_or(Error::InvalidPath(path.to_path_buf()))?,
-            )
-            .map_err(Into::<Error>::into)?;
+            fs::create_dir_all(path).await?;
 
             return Ok(Self {
-                collections: HashMap::new(),
-                location: path.to_path_buf(),
+                inner: Arc::new(RwLock::new(inner)),
             });
         }
         debug!("Loading database from store");
-        let db = fs::read(path).map_err(Into::<Error>::into)?;
-        Ok(bincode::deserialize(&db[..]).map_err(Into::<Error>::into)?)
+
+        let mut entries = fs::read_dir(path).await?;
+        while let Some(entry) = entries.next_entry().await? {
+            let entry_type = entry.file_type().await?;
+            if entry_type.is_file() {
+                let col = fs::read(entry.path()).await?;
+                let col = bincode::deserialize(&col[..])?;
+                let name = entry
+                    .file_name()
+                    .to_str()
+                    .ok_or(Error::InvalidFileName)?
+                    .to_owned();
+                inner.collections.insert(name, Arc::new(RwLock::new(col)));
+            } else {
+                // warning?
+            }
+        }
+        Ok(Self {
+            inner: Arc::new(RwLock::new(inner)),
+        })
     }
 
-    pub fn create_collection(
+    pub async fn create_collection(
         &mut self,
         name: String,
         dimension: usize,
         distance: Distance,
-    ) -> Result<Collection> {
-        if self.collections.contains_key(&name) {
-            return Err(Error::UniqueViolation.into());
+    ) -> Result<Arc<RwLock<Collection>>> {
+        if self.inner.read().await.collections.contains_key(&name) {
+            return Err(CollectionError::UniqueViolation.into());
         }
 
-        let collection = Collection {
+        let collection = Arc::new(RwLock::new(Collection {
             dimension,
             distance,
             embeddings: Vec::new(),
-        };
+        }));
 
-        self.collections.insert(name, collection.clone());
+        self.inner
+            .write()
+            .await
+            .collections
+            .insert(name, collection.clone());
 
         Ok(collection)
     }
 
-    pub fn delete_collection(&mut self, name: &str) {
-        self.collections.remove(name);
+    /// Removes a collection from [`Db`].
+    ///
+    /// The [`Collection`] will still exist in memory for as long as you hold a copy, given it is
+    /// wrapped in an `Arc`.
+    pub async fn delete_collection(&mut self, name: &str) {
+        self.inner.write().await.collections.remove(name);
     }
 
-    pub fn get_collection(&self, name: &str) -> Result<&Collection> {
-        self.collections.get(name).ok_or(Error::NotFound.into())
+    pub async fn get_collection(&self, name: &str) -> Result<Arc<RwLock<Collection>>> {
+        self.inner
+            .read()
+            .await
+            .collections
+            .get(name)
+            .ok_or(CollectionError::NotFound.into())
+            .cloned()
     }
 
-    fn save_to_store(&self) -> Result<()> {
-        let db = bincode::serialize(self).map_err(Into::<Error>::into)?;
+    /// Save database to disk
+    pub async fn save(&self) -> Result<()> {
+        let inner = self.inner.read().await;
+        for (name, collection) in inner.collections.iter() {
+            let db = bincode::serialize(&*collection.read().await)?;
 
-        fs::write(self.location.as_path(), db).map_err(Into::<Error>::into)?;
+            fs::write(inner.location.as_path().join(name), db).await?;
+        }
 
         Ok(())
-    }
-}
-
-impl Drop for Db {
-    fn drop(&mut self) {
-        debug!("Saving database to store");
-        let _ = self.save_to_store();
     }
 }
 
@@ -104,7 +141,7 @@ pub struct Collection {
 }
 
 impl Collection {
-    pub fn filter(&self) -> FilterBuilder {
+    pub fn filter() -> FilterBuilder {
         FilterBuilder::new()
     }
 
@@ -127,12 +164,20 @@ impl Collection {
 
     pub fn insert(&mut self, embedding: Embedding) -> Result<()> {
         if embedding.vector.len() != self.dimension {
-            return Err(Error::DimensionMismatch.into());
+            return Err(CollectionError::DimensionMismatch.into());
         }
 
         self.embeddings.push(embedding);
 
         Ok(())
+    }
+
+    pub fn len(&self) -> usize {
+        self.embeddings.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.embeddings.is_empty()
     }
 }
 
@@ -274,6 +319,12 @@ impl FilterBuilder {
     }
 }
 
+impl Default for FilterBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 async fn get_similarity(
     distance: Distance,
     embeddings: &[&Embedding],
@@ -295,7 +346,7 @@ async fn get_similarity(
 
     let mut heap = BinaryHeap::new();
     while let Some(res) = set.join_next().await {
-        let score_index = res.map_err(Into::<Error>::into)?;
+        let score_index = res.map_err(Into::<CollectionError>::into)?;
         if heap.len() < k || score_index < *heap.peek().unwrap() {
             heap.push(score_index);
 
@@ -323,12 +374,15 @@ mod tests {
     #[tokio::test]
     async fn simple_similarity() {
         let temp_dir = TempDir::new().expect("failed to create tempt dir");
-        let db_path = temp_dir.path().join("embeddings.db");
-        let mut db = match Db::open(db_path) {
+        let db_path = temp_dir.path().join("embeddings");
+        let mut db = match Db::open(db_path).await {
             Ok(db) => db,
             Err(err) => panic!("{}", err.to_string()),
         };
-        let mut col = match db.create_collection("test".to_owned(), 5, Distance::Cosine) {
+        let col = match db
+            .create_collection("test".to_owned(), 5, Distance::Cosine)
+            .await
+        {
             Ok(col) => col,
             Err(err) => panic!("{}", err.to_string()),
         };
@@ -336,7 +390,9 @@ mod tests {
             vec![0.9999695, 0.76456239, 0.86767905, 0.17577756, 0.9949882],
             None,
         );
-        col.insert(embedding.clone())
+        col.write()
+            .await
+            .insert(embedding.clone())
             .expect("faield to insert embedding");
 
         let expected = SimilarityResult {
@@ -344,6 +400,8 @@ mod tests {
             embedding,
         };
         let results = col
+            .read()
+            .await
             .get(
                 &[0.5902804, 0.516834, 0.12403694, 0.8444756, 0.4672038],
                 1,
@@ -361,12 +419,15 @@ mod tests {
     #[tokio::test]
     async fn filter() {
         let temp_dir = TempDir::new().expect("failed to create tempt dir");
-        let db_path = temp_dir.path().join("embeddings.db");
-        let mut db = match Db::open(db_path) {
+        let db_path = temp_dir.path().join("embeddings");
+        let mut db = match Db::open(db_path).await {
             Ok(db) => db,
             Err(err) => panic!("{}", err.to_string()),
         };
-        let mut col = match db.create_collection("test".to_owned(), 5, Distance::Cosine) {
+        let col = match db
+            .create_collection("test".to_owned(), 5, Distance::Cosine)
+            .await
+        {
             Ok(col) => col,
             Err(err) => panic!("{}", err.to_string()),
         };
@@ -377,7 +438,9 @@ mod tests {
                 ("j".to_owned(), 10.0.into()),
             ])),
         );
-        col.insert(embedding1.clone())
+        col.write()
+            .await
+            .insert(embedding1.clone())
             .expect("faield to insert embedding");
         let embedding2 = Embedding::new(
             vec![0.43717385, 0.21100248, 0.5068433, 0.9626808, 0.6763327],
@@ -386,7 +449,9 @@ mod tests {
                 ("j".to_owned(), 100.0.into()),
             ])),
         );
-        col.insert(embedding2.clone())
+        col.write()
+            .await
+            .insert(embedding2.clone())
             .expect("faield to insert embedding");
         let embedding3 = Embedding::new(
             vec![0.2630481, 0.24888718, 0.3375401, 0.92770165, 0.44944693],
@@ -395,7 +460,9 @@ mod tests {
                 ("j".to_owned(), 16.0.into()),
             ])),
         );
-        col.insert(embedding3.clone())
+        col.write()
+            .await
+            .insert(embedding3.clone())
             .expect("faield to insert embedding");
         let embedding4 = Embedding::new(
             vec![0.7642892, 0.47043378, 0.9035855, 0.31120034, 0.5757918],
@@ -404,15 +471,19 @@ mod tests {
                 ("j".to_owned(), 110.0.into()),
             ])),
         );
-        col.insert(embedding4.clone())
+        col.write()
+            .await
+            .insert(embedding4.clone())
             .expect("faield to insert embedding");
 
         let results = col
+            .read()
+            .await
             .get(
                 &[0.09537213, 0.5104327, 0.69980987, 0.13146928, 0.30541683],
                 4,
                 Some(
-                    col.filter()
+                    Collection::filter()
                         .comparison("i".to_owned(), Compare::Lt, 25.0.into())
                         .and()
                         .comparison("j".to_owned(), Compare::Gt, 50.0.into()),
@@ -429,5 +500,48 @@ mod tests {
         let expected_embeddings = vec![embedding4, embedding2];
         let actual_embeddings: Vec<Embedding> = results.into_iter().map(|r| r.embedding).collect();
         assert_eq!(expected_embeddings, actual_embeddings);
+    }
+
+    #[tokio::test]
+    async fn storage() {
+        let temp_dir = TempDir::new().expect("failed to create tempt dir");
+        let db_path = temp_dir.path().join("embeddings");
+
+        let mut db = match Db::open(db_path.as_path()).await {
+            Ok(db) => db,
+            Err(err) => panic!("{}", err.to_string()),
+        };
+        assert!(db.inner.read().await.collections.is_empty());
+        assert_eq!(db.inner.read().await.location, db_path);
+
+        let col = match db
+            .create_collection("test".to_owned(), 5, Distance::Cosine)
+            .await
+        {
+            Ok(col) => col,
+            Err(err) => panic!("{}", err.to_string()),
+        };
+        let embedding = Embedding::new(
+            vec![0.9999695, 0.76456239, 0.86767905, 0.17577756, 0.9949882],
+            None,
+        );
+        col.write()
+            .await
+            .insert(embedding.clone())
+            .expect("faield to insert embedding");
+
+        db.save().await.expect("failed to save to disk");
+        let db = match Db::open(db_path).await {
+            Ok(db) => db,
+            Err(err) => panic!("{}", err.to_string()),
+        };
+        assert_eq!(db.inner.read().await.collections.len(), 1);
+        let col = db
+            .get_collection("test")
+            .await
+            .expect("failed to get collection");
+        assert_eq!(col.read().await.len(), 1);
+        assert_eq!(col.read().await.distance, Distance::Cosine);
+        assert_eq!(col.read().await.dimension, 5);
     }
 }

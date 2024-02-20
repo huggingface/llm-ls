@@ -1,3 +1,3 @@
-mod db;
-mod error;
-mod similarity;
+pub mod db;
+pub mod error;
+pub mod similarity;

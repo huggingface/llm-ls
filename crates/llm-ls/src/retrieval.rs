@@ -1,7 +1,4 @@
 use crate::error::Result;
-use arrow_array::builder::{FixedSizeListBuilder, Float32Builder};
-use arrow_array::{RecordBatch, RecordBatchIterator, StringArray, UInt32Array};
-use arrow_schema::{DataType, Field, Schema};
 use candle::utils::{cuda_is_available, metal_is_available};
 use candle::{Device, Tensor};
 use candle_nn::VarBuilder;
@@ -9,23 +6,21 @@ use candle_transformers::models::bert::{BertModel, Config, DTYPE};
 use futures_util::StreamExt;
 use gitignore::Gitignore;
 use hf_hub::{api::tokio::Api, Repo, RepoType};
-use lance_linalg::distance::MetricType;
 use std::collections::VecDeque;
 use std::path::Path;
 use std::{path::PathBuf, sync::Arc};
+use tinyvec_embed::db::Db;
 use tokenizers::Tokenizer;
 use tokio::io::AsyncReadExt;
 use tokio::task::spawn_blocking;
+use tokio::time::Instant;
 use tower_lsp::lsp_types::notification::Progress;
 use tower_lsp::lsp_types::{
     NumberOrString, ProgressParams, ProgressParamsValue, Range, WorkDoneProgress,
     WorkDoneProgressReport,
 };
 use tower_lsp::Client;
-use tracing::{error, info, warn};
-use vectordb::error::Error;
-use vectordb::table::ReadParams;
-use vectordb::{Connection, Database, Table};
+use tracing::{debug, error, info, warn};
 
 // TODO:
 // - create sliding window and splitting of files logic
@@ -144,6 +139,7 @@ fn is_code_file(file_name: &Path) -> bool {
 }
 
 async fn build_model_and_tokenizer() -> Result<(BertModel, Tokenizer)> {
+    let start = Instant::now();
     let device = device(false)?;
     let model_id = "bigcode/starencoder".to_string();
     let revision = "main".to_string();
@@ -162,6 +158,7 @@ async fn build_model_and_tokenizer() -> Result<(BertModel, Tokenizer)> {
 
     let vb = VarBuilder::from_pth(&weights_filename, DTYPE, &device)?;
     let model = BertModel::load(vb, &config)?;
+    debug!("loaded model in {:.2?}", start.elapsed());
     Ok((model, tokenizer))
 }
 
@@ -185,9 +182,9 @@ fn device(cpu: bool) -> Result<Device> {
     }
 }
 
-async fn initialse_database(cache_path: PathBuf) -> Arc<dyn Table> {
+async fn initialse_database(cache_path: PathBuf) -> Arc<Db> {
     let uri = cache_path.join("database");
-    let db = Database::connect(uri.to_str().expect("path should be utf8"))
+    let db = Db::open(uri.to_str().expect("path should be utf8"))
         .await
         .expect("failed to open database");
     match db
@@ -242,7 +239,7 @@ async fn initialse_database(cache_path: PathBuf) -> Arc<dyn Table> {
 }
 
 pub(crate) struct SnippetRetriever {
-    db: Arc<dyn Table>,
+    db: Arc<Db>,
     model: Arc<BertModel>,
     tokenizer: Tokenizer,
     window_size: usize,
@@ -431,7 +428,7 @@ impl SnippetRetriever {
         let mut results = self
             .db
             .search(&[0.])
-            .metric_type(MetricType::Cosine)
+            .metric_type(Distance::Cosine)
             .filter(&filter)
             .execute_stream()
             .await?;
