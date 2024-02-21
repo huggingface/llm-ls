@@ -3,18 +3,21 @@ use custom_types::llm_ls::{
     AcceptCompletionParams, Backend, Completion, FimParams, GetCompletionsParams,
     GetCompletionsResult, Ide, RejectCompletionParams, TokenizerConfig,
 };
-use retrieval::SnippetRetriever;
+use language_id::LanguageId;
+use retrieval::{Snippet, SnippetRetriever};
 use ropey::Rope;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt::Display;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use tinyvec_embed::db::{Compare, FilterBuilder};
 use tokenizers::Tokenizer;
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpListener;
 use tokio::sync::{mpsc, RwLock};
+use tokio::time::Instant;
 use tower_lsp::jsonrpc::Result as LspResult;
 use tower_lsp::lsp_types::notification::Progress;
 use tower_lsp::lsp_types::request::WorkDoneProgressCreate;
@@ -145,12 +148,40 @@ struct LlmService {
     cancel_snippet_build_rx: Arc<RwLock<mpsc::Receiver<()>>>,
 }
 
-fn build_prompt(
+fn build_context_header(language_id: LanguageId, snippets: Vec<Snippet>) -> String {
+    let comment = language_id.get_language_comment();
+    let mut header = vec![comment.comment_string(
+        "Below are some relevant code snippets contained in this project's files:".to_owned(),
+    )];
+    for snippet in snippets {
+        header.push(comment.comment_string("--------------".to_owned()));
+        header.push(comment.comment_string(format!("snippet from: {}", snippet.file_url)));
+        header.push(comment.comment_string("--------------".to_owned()));
+        header.push(
+            snippet
+                .code
+                .lines()
+                .map(|l| comment.comment_string(l.to_owned()))
+                .collect::<Vec<String>>()
+                .join("\n"),
+        );
+        header.push(comment.comment_string("--------------".to_owned()));
+    }
+    let mut header = header.join("\n");
+    header.push('\n');
+    header
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn build_prompt(
     pos: Position,
     text: &Rope,
     fim: &FimParams,
     tokenizer: Option<Arc<Tokenizer>>,
     context_window: usize,
+    file_url: &str,
+    language_id: LanguageId,
+    snippet_retriever: Arc<RwLock<SnippetRetriever>>,
 ) -> Result<String> {
     let t = Instant::now();
     if fim.enabled {
@@ -199,13 +230,23 @@ fn build_prompt(
             before_line = before_iter.next();
             after_line = after_iter.next();
         }
+        let before = before.into_iter().rev().collect::<Vec<_>>().join("");
+        let snippets = snippet_retriever
+            .read()
+            .await
+            .search(
+                format!("{before}{after}"),
+                Some(FilterBuilder::new().comparison(
+                    "file_url".to_owned(),
+                    Compare::Neq,
+                    file_url.into(),
+                )),
+            )
+            .await?;
+        let context_header = build_context_header(language_id, snippets);
         let prompt = format!(
-            "{}{}{}{}{}",
-            fim.prefix,
-            before.into_iter().rev().collect::<Vec<_>>().join(""),
-            fim.suffix,
-            after,
-            fim.middle
+            "{}{context_header}{before}{}{after}{}",
+            fim.prefix, fim.suffix, fim.middle
         );
         let time = t.elapsed().as_millis();
         info!(prompt, build_prompt_ms = time, "built prompt in {time} ms");
@@ -233,6 +274,20 @@ fn build_prompt(
             before.push(line);
         }
         let prompt = before.into_iter().rev().collect::<Vec<_>>().join("");
+        let snippets = snippet_retriever
+            .read()
+            .await
+            .search(
+                prompt.clone(),
+                Some(FilterBuilder::new().comparison(
+                    "file_url".to_owned(),
+                    Compare::Neq,
+                    file_url.into(),
+                )),
+            )
+            .await?;
+        let context_header = build_context_header(language_id, snippets);
+        let prompt = format!("{context_header}{prompt}");
         let time = t.elapsed().as_millis();
         info!(prompt, build_prompt_ms = time, "built prompt in {time} ms");
         Ok(prompt)
@@ -441,8 +496,9 @@ impl LlmService {
         async move {
             let document_map = self.document_map.read().await;
 
+            let file_url = params.text_document_position.text_document.uri.as_str();
             let document =
-                match document_map.get(params.text_document_position.text_document.uri.as_str()) {
+                match document_map.get(file_url) {
                     Some(doc) => doc,
                     None => {
                         debug!("failed to find document");
@@ -496,7 +552,10 @@ impl LlmService {
                 &params.fim,
                 tokenizer,
                 params.context_window,
-            )?;
+                &file_url.replace("file://", ""),
+                document.language_id,
+                self.snippet_retriever.clone(),
+            ).await?;
 
             let http_client = if params.tls_skip_verify_insecure {
                 info!("tls verification is disabled");

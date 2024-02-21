@@ -10,7 +10,7 @@ use std::path::Path;
 use std::{path::PathBuf, sync::Arc};
 use tinyvec_embed::db::{Collection, Compare, Db, Embedding, FilterBuilder, SimilarityResult};
 use tinyvec_embed::similarity::Distance;
-use tokenizers::Tokenizer;
+use tokenizers::{Encoding, Tokenizer, TruncationDirection};
 use tokio::io::AsyncReadExt;
 use tokio::task::spawn_blocking;
 use tokio::time::Instant;
@@ -203,8 +203,8 @@ async fn initialse_database(cache_path: PathBuf) -> Db {
 }
 
 pub(crate) struct Snippet {
-    file_url: String,
-    code: String,
+    pub(crate) file_url: String,
+    pub(crate) code: String,
 }
 
 impl TryFrom<&SimilarityResult> for Snippet {
@@ -348,8 +348,10 @@ impl SnippetRetriever {
         filter: Option<FilterBuilder>,
     ) -> Result<Vec<Snippet>> {
         let col = self.db.get_collection("code-slices").await?;
+        let mut encoding = self.tokenizer.encode(snippet.clone(), true)?;
+        encoding.truncate(512, 1, TruncationDirection::Right);
         let query = self
-            .generate_embedding(self.model.clone(), snippet, self.tokenizer.clone())
+            .generate_embedding(encoding, self.model.clone())
             .await?;
         let result = col
             .read()
@@ -390,15 +392,15 @@ impl SnippetRetriever {
 }
 
 impl SnippetRetriever {
+    // TODO: handle overflowing in Encoding
     async fn generate_embedding(
         &self,
+        encoding: Encoding,
         model: Arc<BertModel>,
-        snippet: String,
-        tokenizer: Tokenizer,
     ) -> Result<Vec<f32>> {
         let start = Instant::now();
         let embedding = spawn_blocking(move || -> Result<Vec<f32>> {
-            let tokens = tokenizer.encode(snippet, true)?.get_ids().to_vec();
+            let tokens = encoding.get_ids().to_vec();
             let token_ids = Tensor::new(&tokens[..], &model.device)?.unsqueeze(0)?;
             let token_type_ids = token_ids.zeros_like()?;
             let embedding = model.forward(&token_ids, &token_type_ids)?;
@@ -450,16 +452,10 @@ impl SnippetRetriever {
             if snippet.is_empty() {
                 continue;
             }
-            if snippet.len() > 1024 {
-                debug!("snippet {file_url}[{start_line}, {end_line}] is too big to be indexed");
-                continue;
-            }
-            let model = self.model.clone();
-            let snippet_clone = snippet.clone();
-            let tokenizer = self.tokenizer.clone();
-            let result = self
-                .generate_embedding(model, snippet_clone, tokenizer)
-                .await;
+
+            let mut encoding = self.tokenizer.encode(snippet.clone(), true)?;
+            encoding.truncate(512, 1, TruncationDirection::Right);
+            let result = self.generate_embedding(encoding, self.model.clone()).await;
             let embedding = match result {
                 Ok(e) => e,
                 Err(err) => {

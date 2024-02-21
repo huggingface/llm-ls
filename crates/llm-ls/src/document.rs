@@ -123,7 +123,7 @@ fn get_parser(language_id: LanguageId) -> Result<Parser> {
             parser.set_language(tree_sitter_typescript::language_tsx())?;
             Ok(parser)
         }
-        LanguageId::Unknown => Ok(Parser::new()),
+        _ => Ok(Parser::new()),
     }
 }
 

@@ -53,6 +53,8 @@ pub enum Error {
     Rope(#[from] ropey::Error),
     #[error("serde json error: {0}")]
     SerdeJson(#[from] serde_json::Error),
+    #[error("snippet is too larger to be converted to an embedding: {0} > {1}")]
+    SnippetTooLarge(usize, usize),
     #[error("strip prefix error: {0}")]
     StripPrefix(#[from] std::path::StripPrefixError),
     #[error("tgi error: {0}")]
