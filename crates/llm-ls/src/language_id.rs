@@ -220,11 +220,11 @@ pub(crate) struct LanguageComment {
 impl LanguageComment {
     pub(crate) fn comment_string(&self, s: String) -> String {
         let close = if let Some(close) = self.close.as_ref() {
-            close.clone()
+            format!(" {}", close.clone())
         } else {
             String::new()
         };
-        format!("{} {s} {close}", self.open)
+        format!("{} {s}{close}", self.open)
     }
 }
 

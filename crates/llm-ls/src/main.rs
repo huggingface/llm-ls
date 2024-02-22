@@ -17,6 +17,7 @@ use tokenizers::Tokenizer;
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpListener;
 use tokio::sync::{oneshot, RwLock};
+use tokio::task::JoinHandle;
 use tokio::time::Instant;
 use tower_lsp::jsonrpc::Result as LspResult;
 use tower_lsp::lsp_types::notification::Progress;
@@ -145,10 +146,13 @@ struct LlmService {
     snippet_retriever: Arc<RwLock<SnippetRetriever>>,
     supports_progress_bar: Arc<RwLock<bool>>,
     cancel_snippet_build_tx: Arc<RwLock<Option<oneshot::Sender<()>>>>,
-    cancel_snippet_build_rx: Arc<RwLock<Option<oneshot::Receiver<()>>>>,
+    indexation_handle: Arc<RwLock<Option<JoinHandle<()>>>>,
 }
 
 fn build_context_header(language_id: LanguageId, snippets: Vec<Snippet>) -> String {
+    if snippets.is_empty() {
+        return String::new();
+    }
     let comment = language_id.get_language_comment();
     let mut header = vec![comment.comment_string(
         "Below are some relevant code snippets contained in this project's files:".to_owned(),
@@ -603,8 +607,6 @@ impl LlmService {
     }
 }
 
-struct Cancelled(bool);
-
 #[tower_lsp::async_trait]
 impl LanguageServer for LlmService {
     async fn initialize(&self, params: InitializeParams) -> LspResult<InitializeResult> {
@@ -647,82 +649,68 @@ impl LanguageServer for LlmService {
         let token = NumberOrString::Number(42);
 
         let token_copy = NumberOrString::Number(42);
-        if let Some(rx) = self.cancel_snippet_build_rx.write().await.take() {
-            let handle = tokio::spawn(async move {
-                let guard = workspace_folders.read().await;
-                if let Some(workspace_folders) = guard.as_ref() {
-                    if *supports_progress_bar.read().await {
-                        match client
-                            .send_request::<WorkDoneProgressCreate>(WorkDoneProgressCreateParams {
-                                token: token.clone(),
-                            })
-                            .await
-                        {
-                            Ok(_) => (),
-                            Err(err) => {
-                                error!("err: {err}");
-                                return Cancelled(false);
-                            }
-                        };
-                        client
-                            .send_notification::<Progress>(ProgressParams {
-                                token: token.clone(),
-                                value: ProgressParamsValue::WorkDone(WorkDoneProgress::Begin(
-                                    WorkDoneProgressBegin {
-                                        title: "creating workspace embeddings".to_owned(),
-                                        ..Default::default()
-                                    },
-                                )),
-                            })
-                            .await;
-                    }
-                    let mut guard = snippet_retriever.write().await;
-                    tokio::select! {
-                        res = guard.build_workspace_snippets(
-                            client.clone(),
-                            token,
-                            workspace_folders[0].uri.path(),
-                        ) => {
-                            if let Err(err) = res {
-                                error!("failed building workspace snippets: {err}");
-                            }
-                            Cancelled(false)
-                        },
-                        _ = rx => {
-                            debug!("received cancellation, stopping indexation");
-                            Cancelled(true)
-                        },
-                    }
-                } else {
-                    Cancelled(false)
+        let (tx, rx) = oneshot::channel();
+        *self.cancel_snippet_build_tx.write().await = Some(tx);
+        let handle = tokio::spawn(async move {
+            let guard = workspace_folders.read().await;
+            if let Some(workspace_folders) = guard.as_ref() {
+                if *supports_progress_bar.read().await {
+                    match client
+                        .send_request::<WorkDoneProgressCreate>(WorkDoneProgressCreateParams {
+                            token: token.clone(),
+                        })
+                        .await
+                    {
+                        Ok(_) => (),
+                        Err(err) => {
+                            error!("err: {err}");
+                            return;
+                        }
+                    };
+                    client
+                        .send_notification::<Progress>(ProgressParams {
+                            token: token.clone(),
+                            value: ProgressParamsValue::WorkDone(WorkDoneProgress::Begin(
+                                WorkDoneProgressBegin {
+                                    title: "creating workspace embeddings".to_owned(),
+                                    ..Default::default()
+                                },
+                            )),
+                        })
+                        .await;
                 }
-            });
-            let cancelled = match handle.await {
-                Ok(c) => c,
-                Err(err) => {
-                    error!("error building workspace snippets: {err}");
-                    return;
+                let mut guard = snippet_retriever.write().await;
+                tokio::select! {
+                    res = guard.build_workspace_snippets(
+                        client.clone(),
+                        token,
+                        workspace_folders[0].uri.path(),
+                    ) => {
+                        if let Err(err) = res {
+                            error!("failed building workspace snippets: {err}");
+                        }
+                    },
+                    _ = rx => debug!("received cancellation, stopping indexation"),
                 }
-            };
-            if let Cancelled(false) = cancelled {
-                self.client
-                    .log_message(MessageType::INFO, "llm-ls initialized")
-                    .await;
-                info!("initialized language server");
+                if *supports_progress_bar.read().await {
+                    client
+                        .send_notification::<Progress>(ProgressParams {
+                            token: token_copy,
+                            value: ProgressParamsValue::WorkDone(WorkDoneProgress::End(
+                                WorkDoneProgressEnd {
+                                    ..Default::default()
+                                },
+                            )),
+                        })
+                        .await;
+                }
             }
-        }
-        if *self.supports_progress_bar.read().await {
-            self.client
-                .send_notification::<Progress>(ProgressParams {
-                    token: token_copy,
-                    value: ProgressParamsValue::WorkDone(WorkDoneProgress::End(
-                        WorkDoneProgressEnd {
-                            ..Default::default()
-                        },
-                    )),
-                })
-                .await;
-        }
+        });
+        *self.indexation_handle.write().await = Some(handle);
+        self.client
+            .log_message(MessageType::INFO, "llm-ls initialized")
+            .await;
+        info!("initialized language server");
     }
 
     async fn did_open(&self, params: DidOpenTextDocumentParams) {
@@ -837,6 +825,11 @@ impl LanguageServer for LlmService {
             .stop()
             .await
             .map_err(internal_error)?;
+        if let Some(handle) = self.indexation_handle.write().await.take() {
+            if let Err(err) = handle.await {
+                error!("error indexing snippets: {err}");
+            }
+        }
         Ok(())
     }
 }
@@ -891,7 +884,6 @@ async fn main() {
             .await
             .expect("failed to initialise snippet retriever"),
     ));
-    let (tx, rx) = oneshot::channel();
     let (service, socket) = LspService::build(|client| LlmService {
         cache_dir,
         client,
@@ -907,8 +899,8 @@ async fn main() {
         )),
         snippet_retriever,
         supports_progress_bar: Arc::new(RwLock::new(false)),
-        cancel_snippet_build_tx: Arc::new(RwLock::new(Some(tx))),
-        cancel_snippet_build_rx: Arc::new(RwLock::new(Some(rx))),
+        cancel_snippet_build_tx: Arc::new(RwLock::new(None)),
+        indexation_handle: Arc::new(RwLock::new(None)),
     })
     .custom_method("llm-ls/getCompletions", LlmService::get_completions)
     .custom_method("llm-ls/acceptCompletion", LlmService::accept_completion)

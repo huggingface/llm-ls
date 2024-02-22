@@ -20,7 +20,7 @@ use tower_lsp::lsp_types::{
     WorkDoneProgressReport,
 };
 use tower_lsp::Client;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, warn};
 
 // TODO:
 // - create sliding window and splitting of files logic
@@ -261,7 +261,7 @@ impl SnippetRetriever {
         token: NumberOrString,
         workspace_root: &str,
     ) -> Result<()> {
-        info!("building workspace snippets");
+        debug!("building workspace snippets");
         let workspace_root = PathBuf::from(workspace_root);
         let mut files = Vec::new();
         let gitignore = Gitignore::parse(&workspace_root).ok();
