@@ -16,15 +16,16 @@ use tokenizers::{
     Encoding, PaddingDirection, PaddingParams, PaddingStrategy, Tokenizer, TruncationDirection,
 };
 use tokio::io::AsyncReadExt;
-use tokio::task::spawn_blocking;
+use tokio::task::{spawn_blocking};
 use tokio::time::Instant;
 use tower_lsp::lsp_types::notification::Progress;
 use tower_lsp::lsp_types::{
     NumberOrString, ProgressParams, ProgressParamsValue, Range, WorkDoneProgress,
     WorkDoneProgressReport,
 };
+use std::iter::zip;
 use tower_lsp::Client;
-use tracing::{debug, error, warn};
+use tracing::{debug, info, error, warn};
 
 // TODO:
 // - create sliding window and splitting of files logic
@@ -198,6 +199,23 @@ fn device(cpu: bool) -> Result<Device> {
     }
 }
 
+async fn initialse_database(cache_path: PathBuf) -> Db {
+    let uri = cache_path.join("database");
+    let mut db = Db::open(uri).await.expect("failed to open database");
+    match db
+        .create_collection("code-slices".to_owned(), 384, Distance::Cosine)
+        .await
+    {
+        Ok(_)
+        | Err(tinyvec_embed::error::Error::Collection(
+            tinyvec_embed::error::Collection::UniqueViolation,
+        )) => (),
+        Err(err) => panic!("failed to create collection: {err}"),
+    }
+    db
+}
+
+#[derive(Default)]
 pub(crate) struct Snippet {
     pub(crate) file_url: String,
     pub(crate) code: String,
@@ -464,15 +482,24 @@ impl SnippetRetriever {
             Some(db) => db.clone(),
             None => return Err(Error::UninitialisedDatabase),
         };
-        let col = db.get_collection(&self.collection_name).await?;
-        let result = col
-            .read()
-            .await
-            .get(query, 5, filter)
-            .await?
-            .iter()
-            .map(TryInto::try_into)
-            .collect::<Result<Vec<_>>>()?;
+        let col = self.db.get_collection("code-slices").await?;
+        let mut encoding = self.tokenizer.encode(snippet.clone(), true)?;
+        encoding.truncate(512, 1, TruncationDirection::Right);
+        let batch = vec![encoding];
+        let query = self
+            .generate_embedding(batch, self.model.clone())
+            .await?;
+        let result = match query.first() {
+            Some(res) => col
+                .read()
+                .await
+                .get(res, 5, filter)
+                .await?
+                .iter()
+                .map(TryInto::try_into)
+                .collect::<Result<Vec<_>>>()?,
+            _ => vec![Snippet {..Default::default()}]
+        };
         Ok(result)
     }
 
@@ -555,6 +582,7 @@ impl SnippetRetriever {
         debug!("Building embeddings for {file_url}");
         for start_line in (start..end).step_by(self.window_step) {
             let end_line = (start_line + self.window_size - 1).min(lines.len());
+            debug!("Going from line {start_line} to {end_line} in {file_url}");
             if !col
                 .read()
                 .await
