@@ -173,6 +173,16 @@ impl Collection {
         Ok(())
     }
 
+    pub fn batch_insert(&mut self, embeddings: Vec<Embedding>) -> Result<()> {
+        match embeddings.iter().any(|embedding| embedding.vector.len() != self.dimension) {
+            true => Err(CollectionError::DimensionMismatch.into()),
+            false => {
+                self.embeddings.extend(embeddings);
+                Ok(())
+            }
+        }
+    }
+
     /// Remove values matching filter.
     ///
     /// Empties the collection when `filter` is `None`.

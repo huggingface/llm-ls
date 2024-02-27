@@ -11,17 +11,18 @@ use std::path::Path;
 use std::{path::PathBuf, sync::Arc};
 use tinyvec_embed::db::{Collection, Compare, Db, Embedding, FilterBuilder, SimilarityResult};
 use tinyvec_embed::similarity::Distance;
-use tokenizers::{Encoding, Tokenizer, TruncationDirection};
+use tokenizers::{Encoding, Tokenizer, TruncationDirection, PaddingStrategy, PaddingDirection, PaddingParams};
 use tokio::io::AsyncReadExt;
-use tokio::task::spawn_blocking;
+use tokio::task::{spawn_blocking};
 use tokio::time::Instant;
 use tower_lsp::lsp_types::notification::Progress;
 use tower_lsp::lsp_types::{
     NumberOrString, ProgressParams, ProgressParamsValue, Range, WorkDoneProgress,
     WorkDoneProgressReport,
 };
+use std::iter::zip;
 use tower_lsp::Client;
-use tracing::{debug, error, warn};
+use tracing::{debug, info, error, warn};
 
 // TODO:
 // - create sliding window and splitting of files logic
@@ -156,9 +157,14 @@ async fn build_model_and_tokenizer(
     let config = tokio::fs::read_to_string(config_filename).await?;
     let config: Config = serde_json::from_str(&config)?;
     let mut tokenizer: Tokenizer = Tokenizer::from_file(tokenizer_filename)?;
-    tokenizer.with_padding(None);
+    tokenizer.with_padding(Some(PaddingParams { strategy: PaddingStrategy::BatchLongest,
+        direction: PaddingDirection::Right,
+        pad_to_multiple_of: Some(8),
+        // TODO: use values provided in model config
+        pad_id: 0,
+        pad_type_id: 0,
+        pad_token: "<pad>".to_string()}));
     tokenizer.with_truncation(None)?;
-
     let vb = VarBuilder::from_pth(&weights_filename, DTYPE, &device)?;
     let model = BertModel::load(vb, &config)?;
     debug!(
@@ -188,9 +194,28 @@ fn device(cpu: bool) -> Result<Device> {
     }
 }
 
+async fn initialse_database(cache_path: PathBuf) -> Db {
+    let uri = cache_path.join("database");
+    let mut db = Db::open(uri).await.expect("failed to open database");
+    match db
+        .create_collection("code-slices".to_owned(), 384, Distance::Cosine)
+        .await
+    {
+        Ok(_)
+        | Err(tinyvec_embed::error::Error::Collection(
+            tinyvec_embed::error::Collection::UniqueViolation,
+        )) => (),
+        Err(err) => panic!("failed to create collection: {err}"),
+    }
+    db
+}
+
+#[derive(Default)]
 pub(crate) struct Snippet {
     pub(crate) file_url: String,
     pub(crate) code: String,
+    pub(crate) start_line: usize,
+    pub(crate) end_line: usize,
 }
 
 impl TryFrom<&SimilarityResult> for Snippet {
@@ -210,7 +235,7 @@ impl TryFrom<&SimilarityResult> for Snippet {
             .get("snippet")
             .ok_or_else(|| Error::MalformattedEmbeddingMetadata("snippet".to_owned()))?
             .inner_string()?;
-        Ok(Snippet { file_url, code })
+        Ok(Snippet { file_url, code, ..Default::default() })
     }
 }
 
@@ -280,6 +305,7 @@ impl SnippetRetriever {
         workspace_root: &str,
     ) -> Result<()> {
         debug!("building workspace snippets");
+        let start = Instant::now();
         let workspace_root = PathBuf::from(workspace_root);
         if self.db.is_none() {
             self.initialise_database(&format!(
@@ -360,7 +386,7 @@ impl SnippetRetriever {
                 })
                 .await;
         }
-
+        debug!("Built workspace snippets in {} ms", start.elapsed().as_millis());
         Ok(())
     }
 
@@ -428,15 +454,24 @@ impl SnippetRetriever {
             Some(db) => db.clone(),
             None => return Err(Error::UninitialisedDatabase),
         };
-        let col = db.get_collection(&self.collection_name).await?;
-        let result = col
-            .read()
-            .await
-            .get(query, 5, filter)
-            .await?
-            .iter()
-            .map(TryInto::try_into)
-            .collect::<Result<Vec<_>>>()?;
+        let col = self.db.get_collection("code-slices").await?;
+        let mut encoding = self.tokenizer.encode(snippet.clone(), true)?;
+        encoding.truncate(512, 1, TruncationDirection::Right);
+        let batch = vec![encoding];
+        let query = self
+            .generate_embedding(batch, self.model.clone())
+            .await?;
+        let result = match query.first() {
+            Some(res) => col
+                .read()
+                .await
+                .get(res, 5, filter)
+                .await?
+                .iter()
+                .map(TryInto::try_into)
+                .collect::<Result<Vec<_>>>()?,
+            _ => vec![Snippet {..Default::default()}]
+        };
         Ok(result)
     }
 
@@ -479,19 +514,23 @@ impl SnippetRetriever {
     // TODO: handle overflowing in Encoding
     async fn generate_embedding(
         &self,
-        encoding: Encoding,
+        encodings: Vec<Encoding>,
         model: Arc<BertModel>,
-    ) -> Result<Vec<f32>> {
+    ) -> Result<Vec<Vec<f32>>> {
         let start = Instant::now();
-        let embedding = spawn_blocking(move || -> Result<Vec<f32>> {
-            let tokens = encoding.get_ids().to_vec();
-            let token_ids = Tensor::new(&tokens[..], &model.device)?.unsqueeze(0)?;
+        let embedding = spawn_blocking(move || -> Result<Vec<Vec<f32>>> {
+            let tokens = encodings
+                .iter()
+                .map(|elem| {
+                    Ok(Tensor::new(elem.get_ids().to_vec(), &model.device)?)
+                } )
+                .collect::<Result<Vec<_>>>()?;
+            let token_ids = Tensor::stack(&tokens, 0)?;
             let token_type_ids = token_ids.zeros_like()?;
             let embedding = model.forward(&token_ids, &token_type_ids)?;
             let (_n_sentence, n_tokens, _hidden_size) = embedding.dims3()?;
             let embedding = (embedding.sum(1)? / (n_tokens as f64))?;
-            let embedding = embedding.get(0)?.to_vec1::<f32>()?;
-            Ok(embedding)
+            Ok(embedding.to_vec2::<f32>()?)
         })
         .await?;
         debug!("embedding generated in {} ms", start.elapsed().as_millis());
@@ -512,8 +551,11 @@ impl SnippetRetriever {
         let file = tokio::fs::read_to_string(&file_url).await?;
         let lines = file.split('\n').collect::<Vec<_>>();
         let end = end.unwrap_or(lines.len()).min(lines.len());
+        let mut snippets: Vec<Snippet> = Vec::new();
+        debug!("Starting KB for file {file_url}");
         for start_line in (start..end).step_by(self.window_step) {
             let end_line = (start_line + self.window_size - 1).min(lines.len());
+            debug!("Going from line {start_line} to {end_line} in {file_url}");
             if !col
                 .read()
                 .await
@@ -538,35 +580,63 @@ impl SnippetRetriever {
             let window = lines[start_line..end_line].to_vec();
             let snippet = window.join("\n");
             if snippet.is_empty() {
-                continue;
-            }
-
-            let mut encoding = self.tokenizer.encode(snippet.clone(), true)?;
-            encoding.truncate(
-                self.model_config.max_input_size,
-                1,
-                TruncationDirection::Right,
-            );
-            let result = self.generate_embedding(encoding, self.model.clone()).await;
-            let embedding = match result {
-                Ok(e) => e,
-                Err(err) => {
-                    error!(
-                        "error generating embedding for {file_url}[{start_line}, {end_line}]: {err}",
-                    );
+                    debug!("snippet {file_url}[{start_line}, {end_line}] empty");
                     continue;
+            }
+            snippets.push(Snippet{ file_url: file_url.clone().into(), code: snippet, start_line, end_line });
+        }
+        {
+            let nb_snippets = snippets.len();
+            let steps = self.window_step;
+            debug!("Found {nb_snippets} snippets in {file_url}: {start}, {end}, {steps}");
+        }
+
+        // Group by length to reduce padding effect
+        snippets.sort_by(|first, second| first.code.len().cmp(&second.code.len()));
+        // TODO improvements to compute an efficient batch size:
+        //  - batch size should be relative to the cumulative size of all elements in the batch,
+        // Set embedding_batch_size to 8 if device is GPU, use match
+        let embedding_batch_size = match self.model.device {
+            Device::Cpu => 1,
+            _ => 8,
+        };
+        for batch in snippets.chunks(embedding_batch_size) {
+            let batch_code = batch
+                .iter()
+                .map(|snippet| snippet.code.clone())
+                .collect();
+            let encodings = self.tokenizer
+                .encode_batch(batch_code, true)?
+                .iter_mut()
+                .map(|encoding| {
+                    encoding.truncate(512, 1, TruncationDirection::Right);
+                    encoding.clone()
+                })
+                .collect();
+            let results = match self.generate_embedding(encodings, self.model.clone()).await {
+                Ok(result) => result,
+                Err(err) => {
+                    debug!("Unable to generate embeddings because of {:?}", err);
+                    panic!("{}", err)
                 }
             };
-            col.write().await.insert(Embedding::new(
-                embedding,
-                Some(HashMap::from([
-                    ("file_url".to_owned(), file_url.clone().into()),
-                    ("start_line_no".to_owned(), start_line.into()),
-                    ("end_line_no".to_owned(), end_line.into()),
-                    ("snippet".to_owned(), snippet.clone().into()),
-                ])),
-            ))?;
+            col.write().await.batch_insert(zip(results, batch).map(|item| {
+                let (embedding, snippet) = item;
+                debug!("Inserting computed snippets for {0}", snippet.file_url);
+                Embedding::new(
+                    embedding,
+                    Some(HashMap::from([
+                        ("file_url".to_owned(), snippet.file_url.clone().into()),
+                        ("start_line_no".to_owned(), snippet.start_line.into()),
+                        ("end_line_no".to_owned(), snippet.end_line.into()),
+                        ("snippet".to_owned(), snippet.code.clone().into()),
+                    ])))
+            }).collect::<Vec<Embedding>>()
+            ).unwrap();
         }
+        self.db
+            .save()
+            .await?;
         Ok(())
     }
 }
