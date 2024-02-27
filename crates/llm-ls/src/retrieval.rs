@@ -1,3 +1,4 @@
+use crate::config::LlmLsConfig;
 use crate::error::{Error, Result};
 use candle::utils::{cuda_is_available, metal_is_available};
 use candle::{Device, Tensor};
@@ -258,13 +259,21 @@ impl SnippetRetriever {
     pub(crate) async fn build_workspace_snippets(
         &mut self,
         client: Client,
+        config: Arc<LlmLsConfig>,
         token: NumberOrString,
         workspace_root: &str,
     ) -> Result<()> {
         debug!("building workspace snippets");
         let workspace_root = PathBuf::from(workspace_root);
         let mut files = Vec::new();
-        let gitignore = Gitignore::parse(&workspace_root).ok();
+        let mut gitignore = Gitignore::parse(&workspace_root).ok();
+        for pattern in config.ignored_paths.iter() {
+            if let Some(gitignore) = gitignore.as_mut() {
+                if let Err(err) = gitignore.add_rule(pattern.clone()) {
+                    error!("failed to parse pattern: {err}");
+                }
+            };
+        }
 
         client
             .send_notification::<Progress>(ProgressParams {

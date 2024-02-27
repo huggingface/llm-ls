@@ -1,4 +1,5 @@
 use clap::Parser;
+use config::{load_config, LlmLsConfig};
 use custom_types::llm_ls::{
     AcceptCompletionParams, Backend, Completion, FimParams, GetCompletionsParams,
     GetCompletionsResult, Ide, RejectCompletionParams, TokenizerConfig,
@@ -34,6 +35,7 @@ use crate::document::Document;
 use crate::error::{internal_error, Error, Result};
 
 mod backend;
+mod config;
 mod document;
 mod error;
 mod language_id;
@@ -137,6 +139,7 @@ pub struct Generation {
 struct LlmService {
     cache_dir: PathBuf,
     client: Client,
+    config: Arc<LlmLsConfig>,
     document_map: Arc<RwLock<HashMap<String, Document>>>,
     http_client: reqwest::Client,
     unsafe_http_client: reqwest::Client,
@@ -643,6 +646,7 @@ impl LanguageServer for LlmService {
 
     async fn initialized(&self, _: InitializedParams) {
         let client = self.client.clone();
+        let config = self.config.clone();
         let snippet_retriever = self.snippet_retriever.clone();
         let supports_progress_bar = self.supports_progress_bar.clone();
         let workspace_folders = self.workspace_folders.clone();
@@ -683,6 +687,7 @@ impl LanguageServer for LlmService {
                 tokio::select! {
                     res = guard.build_workspace_snippets(
                         client.clone(),
+                        config,
                         token,
                         workspace_folders[0].uri.path(),
                     ) => {
@@ -884,9 +889,19 @@ async fn main() {
             .await
             .expect("failed to initialise snippet retriever"),
     ));
+    let config = Arc::new(
+        load_config(
+            cache_dir
+                .to_str()
+                .expect("cache dir path is not valid utf8"),
+        )
+        .await
+        .expect("failed to load config file"),
+    );
     let (service, socket) = LspService::build(|client| LlmService {
         cache_dir,
         client,
+        config,
         document_map: Arc::new(RwLock::new(HashMap::new())),
         http_client,
         unsafe_http_client,

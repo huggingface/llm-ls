@@ -17,6 +17,8 @@ pub(crate) fn internal_error<E: Display>(err: E) -> LspError {
 pub enum Error {
     #[error("candle error: {0}")]
     Candle(#[from] candle::Error),
+    #[error("config error: {0}")]
+    Config(#[from] config::ConfigError),
     #[error("gitignore error: {0}")]
     Gitignore(#[from] gitignore::Error),
     #[error("huggingface api error: {0}")]
@@ -69,6 +71,8 @@ pub enum Error {
     TokioJoin(#[from] tokio::task::JoinError),
     #[error("unknown backend: {0}")]
     UnknownBackend(String),
+    #[error("yaml serialization error: {0}")]
+    Yaml(#[from] serde_yaml::Error),
 }
 
 pub(crate) type Result<T> = std::result::Result<T, Error>;

@@ -7,10 +7,11 @@ edition = "2021"
 name = "llm-ls"
 
 [dependencies]
-candle = { version = "0.3", package = "candle-core", default-features = false }
-candle-nn = "0.3"
-candle-transformers = "0.3"
+candle = { version = "0.4", package = "candle-core", default-features = false }
+candle-nn = "0.4"
+candle-transformers = "0.4"
 clap = { version = "4", features = ["derive"] }
+config = { version = "0.14", features = ["yaml"], default_features = false }
 custom-types = { path = "../custom-types" }
 futures-util = "0.3"
 gitignore = { path = "../gitignore" }
@@ -25,6 +26,7 @@ reqwest = { version = "0.11", default-features = false, features = [
   "rustls-tls",
 ] }
 serde = { version = "1", features = ["derive"] }
+serde_yaml = "0.9"
 serde_json = "1"
 thiserror = "1"
 tinyvec-embed = { path = "../tinyvec-embed" }
