@@ -545,7 +545,6 @@ impl SnippetRetriever {
         encodings: Vec<Encoding>,
         model: Arc<BertModel>,
     ) -> Result<Vec<Vec<f32>>> {
-        // Embedding order has to be preserved and stay the same as encoding input
         let start = Instant::now();
         let embedding = spawn_blocking(move || -> Result<Vec<Vec<f32>>> {
             let tokens = encodings
