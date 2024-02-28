@@ -632,7 +632,7 @@ impl SnippetRetriever {
                         ("snippet".to_owned(), snippet.code.clone().into()),
                     ])))
             }).collect::<Vec<Embedding>>()
-            ).unwrap();
+            )?;
         }
         self.db
             .save()
