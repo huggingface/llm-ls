@@ -1,4 +1,4 @@
-use std::fmt::Display;
+use std::{fmt::Display, path::PathBuf};
 
 use tower_lsp::jsonrpc::Error as LspError;
 use tracing::error;
@@ -41,6 +41,10 @@ pub enum Error {
     MalformattedEmbeddingMetadata(String),
     #[error("embedding has no metadata")]
     MissingMetadata,
+    #[error("no final path: {0}")]
+    NoFinalPath(PathBuf),
+    #[error("error converting to string")]
+    NonUnicode,
     #[error("ollama error: {0}")]
     Ollama(crate::backend::APIError),
     #[error("openai error: {0}")]
@@ -69,6 +73,8 @@ pub enum Error {
     Tokenizer(#[from] tokenizers::Error),
     #[error("tokio join error: {0}")]
     TokioJoin(#[from] tokio::task::JoinError),
+    #[error("embeddings database is uninitialised")]
+    UninitialisedDatabase,
     #[error("unknown backend: {0}")]
     UnknownBackend(String),
     #[error("yaml serialization error: {0}")]

@@ -187,22 +187,6 @@ fn device(cpu: bool) -> Result<Device> {
     }
 }
 
-async fn initialse_database(cache_path: PathBuf) -> Db {
-    let uri = cache_path.join("database");
-    let mut db = Db::open(uri).await.expect("failed to open database");
-    match db
-        .create_collection("code-slices".to_owned(), 384, Distance::Cosine)
-        .await
-    {
-        Ok(_)
-        | Err(tinyvec_embed::error::Error::Collection(
-            tinyvec_embed::error::Collection::UniqueViolation,
-        )) => (),
-        Err(err) => panic!("failed to create collection: {err}"),
-    }
-    db
-}
-
 pub(crate) struct Snippet {
     pub(crate) file_url: String,
     pub(crate) code: String,
@@ -230,7 +214,9 @@ impl TryFrom<&SimilarityResult> for Snippet {
 }
 
 pub(crate) struct SnippetRetriever {
-    db: Db,
+    cache_path: PathBuf,
+    collection_name: String,
+    db: Option<Db>,
     model: Arc<BertModel>,
     tokenizer: Tokenizer,
     window_size: usize,
@@ -246,14 +232,34 @@ impl SnippetRetriever {
         window_size: usize,
         window_step: usize,
     ) -> Result<Self> {
+        let collection_name = "code-slices".to_owned();
         let (model, tokenizer) = build_model_and_tokenizer().await?;
         Ok(Self {
-            db: initialse_database(cache_path).await,
+            cache_path,
+            collection_name,
+            db: None,
             model: Arc::new(model),
             tokenizer,
             window_size,
             window_step,
         })
+    }
+
+    pub(crate) async fn initialse_database(&mut self, db_name: &str) -> Result<Db> {
+        let uri = self.cache_path.join(db_name);
+        let mut db = Db::open(uri).await.expect("failed to open database");
+        match db
+            .create_collection(self.collection_name.clone(), 384, Distance::Cosine)
+            .await
+        {
+            Ok(_)
+            | Err(tinyvec_embed::error::Error::Collection(
+                tinyvec_embed::error::Collection::UniqueViolation,
+            )) => (),
+            Err(err) => panic!("failed to create collection: {err}"),
+        }
+        self.db = Some(db.clone());
+        Ok(db)
     }
 
     pub(crate) async fn build_workspace_snippets(
@@ -265,6 +271,16 @@ impl SnippetRetriever {
     ) -> Result<()> {
         debug!("building workspace snippets");
         let workspace_root = PathBuf::from(workspace_root);
+        if self.db.is_none() {
+            self.initialse_database(
+                workspace_root
+                    .file_name()
+                    .ok_or_else(|| Error::NoFinalPath(workspace_root.clone()))?
+                    .to_str()
+                    .ok_or(Error::NonUnicode)?,
+            )
+            .await?;
+        }
         let mut files = Vec::new();
         let mut gitignore = Gitignore::parse(&workspace_root).ok();
         for pattern in config.ignored_paths.iter() {
@@ -356,7 +372,11 @@ impl SnippetRetriever {
         snippet: String,
         filter: Option<FilterBuilder>,
     ) -> Result<Vec<Snippet>> {
-        let col = self.db.get_collection("code-slices").await?;
+        let db = match self.db.as_ref() {
+            Some(db) => db.clone(),
+            None => return Err(Error::UninitialisedDatabase),
+        };
+        let col = db.get_collection(&self.collection_name).await?;
         let mut encoding = self.tokenizer.encode(snippet.clone(), true)?;
         encoding.truncate(512, 1, TruncationDirection::Right);
         let query = self
@@ -374,12 +394,20 @@ impl SnippetRetriever {
     }
 
     pub(crate) async fn stop(&self) -> Result<()> {
-        self.db.save().await?;
+        let db = match self.db.as_ref() {
+            Some(db) => db.clone(),
+            None => return Err(Error::UninitialisedDatabase),
+        };
+        db.save().await?;
         Ok(())
     }
 
     pub(crate) async fn remove(&self, file_url: String, range: Range) -> Result<()> {
-        let col = self.db.get_collection("code-slices").await?;
+        let db = match self.db.as_ref() {
+            Some(db) => db.clone(),
+            None => return Err(Error::UninitialisedDatabase),
+        };
+        let col = db.get_collection(&self.collection_name).await?;
         col.write().await.remove(Some(
             Collection::filter()
                 .comparison(
@@ -429,7 +457,11 @@ impl SnippetRetriever {
         start: usize,
         end: Option<usize>,
     ) -> Result<()> {
-        let col = self.db.get_collection("code-slices").await?;
+        let db = match self.db.as_ref() {
+            Some(db) => db.clone(),
+            None => return Err(Error::UninitialisedDatabase),
+        };
+        let col = db.get_collection("code-slices").await?;
         let file = tokio::fs::read_to_string(&file_url).await?;
         let lines = file.split('\n').collect::<Vec<_>>();
         let end = end.unwrap_or(lines.len()).min(lines.len());

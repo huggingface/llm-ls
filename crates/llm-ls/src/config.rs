@@ -15,7 +15,7 @@ pub(crate) struct LlmLsConfig {
 impl Default for LlmLsConfig {
     fn default() -> Self {
         Self {
-            ignored_paths: vec![".git/".into(), ".idea/".into(), ".DS_Store/".into()],
+            ignored_paths: vec![".git".into(), ".idea".into(), ".DS_Store".into()],
         }
     }
 }

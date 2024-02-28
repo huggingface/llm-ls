@@ -820,9 +820,7 @@ impl LanguageServer for LlmService {
     async fn shutdown(&self) -> LspResult<()> {
         debug!("shutdown");
         if let Some(tx) = self.cancel_snippet_build_tx.write().await.take() {
-            if tx.send(()).is_err() {
-                return Err(internal_error("failed to cancel indexing"));
-            }
+            let _ = tx.send(());
         }
         self.snippet_retriever
             .read()
@@ -885,7 +883,7 @@ async fn main() {
         .expect("failed to build reqwest unsafe client");
 
     let snippet_retriever = Arc::new(RwLock::new(
-        SnippetRetriever::new(cache_dir.clone(), 20, 10)
+        SnippetRetriever::new(cache_dir.join("database"), 20, 10)
             .await
             .expect("failed to initialise snippet retriever"),
     ));

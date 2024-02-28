@@ -106,9 +106,18 @@ impl Gitignore {
         })
     }
 
+    /// Checks if a path is ignored.
+    ///
+    /// Path can be relative within the directory which contains the `.gitignore` file.
+    ///
+    /// # Errors
+    ///
+    /// This function will return an error if the file does not exist.
     pub fn ignored(&self, path: impl AsRef<Path>) -> Result<bool> {
         let path = if path.as_ref().starts_with(&self.base_path) {
             path.as_ref().to_path_buf()
+        } else if path.as_ref().has_root() {
+            return Ok(false);
         } else {
             canonicalize(self.base_path.join(path))?
         };
