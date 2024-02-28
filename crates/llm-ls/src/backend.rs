@@ -4,6 +4,7 @@ use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, USER_AGENT};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use std::fmt::Display;
+use tracing::{debug};
 
 use crate::error::{Error, Result};
 
@@ -168,11 +169,15 @@ fn build_openai_headers(api_token: Option<&String>, ide: Ide) -> Result<HeaderMa
 }
 
 fn parse_openai_text(text: &str) -> Result<Vec<Generation>> {
-    match serde_json::from_str(text)? {
+    match serde_json::from_str(text).unwrap() {
         OpenAIAPIResponse::Generation(completion) => {
             Ok(completion.choices.into_iter().map(|x| x.into()).collect())
         }
-        OpenAIAPIResponse::Error(err) => Err(Error::OpenAI(err)),
+        OpenAIAPIResponse::Error(err) => {
+            debug!("Got {text}");
+            Err(Error::OpenAI(err))
+        },
+        
     }
 }
 
@@ -215,6 +220,7 @@ pub(crate) fn build_headers(
 }
 
 pub(crate) fn parse_generations(backend: &Backend, text: &str) -> Result<Vec<Generation>> {
+    debug!("Got {text}");
     match backend {
         Backend::HuggingFace { .. } => parse_api_text(text),
         Backend::Ollama { .. } => parse_ollama_text(text),

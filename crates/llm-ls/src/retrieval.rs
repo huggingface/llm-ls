@@ -25,7 +25,7 @@ use tower_lsp::lsp_types::{
 };
 use std::iter::zip;
 use tower_lsp::Client;
-use tracing::{debug, info, error, warn};
+use tracing::{debug, info, error, warn, error};
 
 // TODO:
 // - create sliding window and splitting of files logic
@@ -215,7 +215,6 @@ async fn initialse_database(cache_path: PathBuf) -> Db {
     db
 }
 
-#[derive(Default)]
 pub(crate) struct Snippet {
     pub(crate) file_url: String,
     pub(crate) code: String,
@@ -487,7 +486,7 @@ impl SnippetRetriever {
         encoding.truncate(512, 1, TruncationDirection::Right);
         let batch = vec![encoding];
         let query = self
-            .generate_embedding(batch, self.model.clone())
+            .generate_embeddings(batch, self.model.clone())
             .await?;
         let result = match query.first() {
             Some(res) => col
@@ -546,6 +545,7 @@ impl SnippetRetriever {
         encodings: Vec<Encoding>,
         model: Arc<BertModel>,
     ) -> Result<Vec<Vec<f32>>> {
+        // Embedding order has to be preserved and stay the same as encoding input
         let start = Instant::now();
         let embedding = spawn_blocking(move || -> Result<Vec<Vec<f32>>> {
             let tokens = encodings
