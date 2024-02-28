@@ -174,13 +174,13 @@ impl Collection {
     }
 
     pub fn batch_insert(&mut self, embeddings: Vec<Embedding>) -> Result<()> {
-        match embeddings.iter().any(|embedding| embedding.vector.len() != self.dimension) {
-            true => Err(CollectionError::DimensionMismatch.into()),
-            false => {
-                self.embeddings.extend(embeddings);
-                Ok(())
-            }
+        if embeddings.iter().any(|embedding| embedding.vector.len() != self.dimension) {
+            Err(CollectionError::DimensionMismatch.into())
+        } else {
+            self.embeddings.extend(embeddings);
+            Ok(())
         }
+
     }
 
     /// Remove values matching filter.
@@ -234,6 +234,7 @@ impl Eq for Embedding {}
 pub enum Value {
     String(String),
     Number(f32),
+    Usize(usize),
 }
 
 impl Display for Value {
@@ -241,6 +242,7 @@ impl Display for Value {
         match self {
             Self::String(s) => write!(f, "{s}"),
             Self::Number(n) => write!(f, "{n}"),
+            Self::Usize(u) => write!(f, "{u}"),
         }
     }
 }
@@ -249,6 +251,13 @@ impl Value {
     pub fn inner_string(&self) -> Result<String> {
         match self {
             Self::String(s) => Ok(s.to_owned()),
+            _ => Err(Error::ValueNotString(self.to_owned())),
+        }
+    }
+
+    pub fn inner_value(&self) -> Result<usize> {
+        match self {
+            Self::Usize(s) => Ok(s.to_owned()),
             _ => Err(Error::ValueNotString(self.to_owned())),
         }
     }

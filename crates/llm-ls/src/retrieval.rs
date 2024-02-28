@@ -22,7 +22,7 @@ use tower_lsp::lsp_types::{
 };
 use std::iter::zip;
 use tower_lsp::Client;
-use tracing::{debug, info, error, warn};
+use tracing::{debug, info, error, warn, error};
 
 // TODO:
 // - create sliding window and splitting of files logic
@@ -210,7 +210,6 @@ async fn initialse_database(cache_path: PathBuf) -> Db {
     db
 }
 
-#[derive(Default)]
 pub(crate) struct Snippet {
     pub(crate) file_url: String,
     pub(crate) code: String,
@@ -235,7 +234,15 @@ impl TryFrom<&SimilarityResult> for Snippet {
             .get("snippet")
             .ok_or_else(|| Error::MalformattedEmbeddingMetadata("snippet".to_owned()))?
             .inner_string()?;
-        Ok(Snippet { file_url, code, ..Default::default() })
+        let start_line = meta
+            .get("start_line_no")
+            .ok_or_else(|| Error::MalformattedEmbeddingMetadata("snippet".to_owned()))?
+            .inner_value()?;
+        let end_line = meta
+            .get("start_line_no")
+            .ok_or_else(|| Error::MalformattedEmbeddingMetadata("snippet".to_owned()))?
+            .inner_value()?;
+        Ok(Snippet { file_url, code, start_line, end_line })
     }
 }
 
@@ -459,7 +466,7 @@ impl SnippetRetriever {
         encoding.truncate(512, 1, TruncationDirection::Right);
         let batch = vec![encoding];
         let query = self
-            .generate_embedding(batch, self.model.clone())
+            .generate_embeddings(batch, self.model.clone())
             .await?;
         let result = match query.first() {
             Some(res) => col
@@ -517,6 +524,7 @@ impl SnippetRetriever {
         encodings: Vec<Encoding>,
         model: Arc<BertModel>,
     ) -> Result<Vec<Vec<f32>>> {
+        // Embedding order has to be preserved and stay the same as encoding input
         let start = Instant::now();
         let embedding = spawn_blocking(move || -> Result<Vec<Vec<f32>>> {
             let tokens = encodings
@@ -591,15 +599,19 @@ impl SnippetRetriever {
         }
 
         // Group by length to reduce padding effect
-        snippets.sort_by(|first, second| first.code.len().cmp(&second.code.len()));
-        // TODO improvements to compute an efficient batch size:
+        let snippets = spawn_blocking(|| -> Result<Vec<Snippet>> {
+            snippets.sort_unstable_by(|first, second| first.code.len().cmp(&second.code.len()));
+            Ok(snippets)
+        }).await?;
+
+        // TODO: improvements to compute an efficient batch size:
         //  - batch size should be relative to the cumulative size of all elements in the batch,
         // Set embedding_batch_size to 8 if device is GPU, use match
         let embedding_batch_size = match self.model.device {
-            Device::Cpu => 1,
+            Device::Cpu => 2,
             _ => 8,
         };
-        for batch in snippets.chunks(embedding_batch_size) {
+        for batch in snippets?.chunks(embedding_batch_size) {
             let batch_code = batch
                 .iter()
                 .map(|snippet| snippet.code.clone())
@@ -612,13 +624,13 @@ impl SnippetRetriever {
                     encoding.clone()
                 })
                 .collect();
-            let results = match self.generate_embedding(encodings, self.model.clone()).await {
-                Ok(result) => result,
+            let results = match self.generate_embeddings(encodings, self.model.clone()).await {
+                Ok(result) => Ok(result),
                 Err(err) => {
-                    debug!("generate embeddings error: {err}");
-                    panic!("{}", err)
+                    error!("Unable to generate embeddings because of {:?}", err);
+                    Err(err)
                 }
-            };
+            }?;
             col.write().await.batch_insert(zip(results, batch).map(|item| {
                 let (embedding, snippet) = item;
                 Embedding::new(
