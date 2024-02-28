@@ -470,7 +470,7 @@ impl SnippetRetriever {
                 .iter()
                 .map(TryInto::try_into)
                 .collect::<Result<Vec<_>>>()?,
-            _ => vec![Snippet {..Default::default()}]
+            _ => vec![]
         };
         Ok(result)
     }
