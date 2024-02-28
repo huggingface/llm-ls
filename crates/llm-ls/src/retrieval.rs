@@ -512,7 +512,7 @@ impl SnippetRetriever {
 
 impl SnippetRetriever {
     // TODO: handle overflowing in Encoding
-    async fn generate_embedding(
+    async fn generate_embeddings(
         &self,
         encodings: Vec<Encoding>,
         model: Arc<BertModel>,
