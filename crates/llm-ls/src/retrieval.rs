@@ -615,7 +615,7 @@ impl SnippetRetriever {
             let results = match self.generate_embedding(encodings, self.model.clone()).await {
                 Ok(result) => result,
                 Err(err) => {
-                    debug!("Unable to generate embeddings because of {:?}", err);
+                    debug!("generate embeddings error: {err}");
                     panic!("{}", err)
                 }
             };
