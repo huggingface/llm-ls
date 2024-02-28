@@ -582,7 +582,6 @@ impl SnippetRetriever {
         debug!("Building embeddings for {file_url}");
         for start_line in (start..end).step_by(self.window_step) {
             let end_line = (start_line + self.window_size - 1).min(lines.len());
-            debug!("Going from line {start_line} to {end_line} in {file_url}");
             if !col
                 .read()
                 .await
