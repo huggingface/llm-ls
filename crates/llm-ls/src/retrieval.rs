@@ -519,12 +519,12 @@ impl SnippetRetriever {
 
 impl SnippetRetriever {
     // TODO: handle overflowing in Encoding
+    /// Embedding order is preserved and stays the same as encoding input
     async fn generate_embeddings(
         &self,
         encodings: Vec<Encoding>,
         model: Arc<BertModel>,
     ) -> Result<Vec<Vec<f32>>> {
-        // Embedding order has to be preserved and stay the same as encoding input
         let start = Instant::now();
         let embedding = spawn_blocking(move || -> Result<Vec<Vec<f32>>> {
             let tokens = encodings
@@ -595,7 +595,7 @@ impl SnippetRetriever {
         {
             let nb_snippets = snippets.len();
             let steps = self.window_step;
-            debug!("Found {nb_snippets} snippets in {file_url}: {start}, {end}, {steps}");
+            debug!("Build {nb_snippets} snippets for {file_url}: {start}, {end}, {steps}");
         }
 
         // Group by length to reduce padding effect
@@ -624,13 +624,7 @@ impl SnippetRetriever {
                     encoding.clone()
                 })
                 .collect();
-            let results = match self.generate_embeddings(encodings, self.model.clone()).await {
-                Ok(result) => Ok(result),
-                Err(err) => {
-                    error!("Unable to generate embeddings because of {:?}", err);
-                    Err(err)
-                }
-            }?;
+            let results = self.generate_embeddings(encodings, self.model.clone()).await?;
             col.write().await.batch_insert(zip(results, batch).map(|item| {
                 let (embedding, snippet) = item;
                 Embedding::new(

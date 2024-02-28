@@ -175,12 +175,10 @@ impl Collection {
 
     pub fn batch_insert(&mut self, embeddings: Vec<Embedding>) -> Result<()> {
         if embeddings.iter().any(|embedding| embedding.vector.len() != self.dimension) {
-            Err(CollectionError::DimensionMismatch.into())
-        } else {
-            self.embeddings.extend(embeddings);
-            Ok(())
+            return Err(CollectionError::DimensionMismatch.into());
         }
-
+        self.embeddings.extend(embeddings);
+        Ok(())
     }
 
     /// Remove values matching filter.
