@@ -1,4 +1,4 @@
-use crate::config::LlmLsConfig;
+use crate::config::{LlmLsConfig, ModelConfig};
 use crate::error::{Error, Result};
 use candle::utils::{cuda_is_available, metal_is_available};
 use candle::{Device, Tensor};
@@ -138,11 +138,12 @@ fn is_code_file(file_name: &Path) -> bool {
     }
 }
 
-async fn build_model_and_tokenizer() -> Result<(BertModel, Tokenizer)> {
+async fn build_model_and_tokenizer(
+    model_id: String,
+    revision: String,
+) -> Result<(BertModel, Tokenizer)> {
     let start = Instant::now();
     let device = device(false)?;
-    let model_id = "intfloat/multilingual-e5-small".to_string();
-    let revision = "main".to_string();
     let repo = Repo::with_revision(model_id, RepoType::Model, revision);
     let (config_filename, tokenizer_filename, weights_filename) = {
         let api = Api::new()?;
@@ -218,6 +219,7 @@ pub(crate) struct SnippetRetriever {
     collection_name: String,
     db: Option<Db>,
     model: Arc<BertModel>,
+    model_config: ModelConfig,
     tokenizer: Tokenizer,
     window_size: usize,
     window_step: usize,
@@ -229,16 +231,20 @@ impl SnippetRetriever {
     /// Panics if the database cannot be initialised.
     pub(crate) async fn new(
         cache_path: PathBuf,
+        model_config: ModelConfig,
         window_size: usize,
         window_step: usize,
     ) -> Result<Self> {
         let collection_name = "code-slices".to_owned();
-        let (model, tokenizer) = build_model_and_tokenizer().await?;
+        let (model, tokenizer) =
+            build_model_and_tokenizer(model_config.id.clone(), model_config.revision.clone())
+                .await?;
         Ok(Self {
             cache_path,
             collection_name,
             db: None,
             model: Arc::new(model),
+            model_config,
             tokenizer,
             window_size,
             window_step,
@@ -249,7 +255,11 @@ impl SnippetRetriever {
         let uri = self.cache_path.join(db_name);
         let mut db = Db::open(uri).await.expect("failed to open database");
         match db
-            .create_collection(self.collection_name.clone(), 384, Distance::Cosine)
+            .create_collection(
+                self.collection_name.clone(),
+                self.model_config.embeddings_size,
+                Distance::Cosine,
+            )
             .await
         {
             Ok(_)
@@ -378,7 +388,11 @@ impl SnippetRetriever {
         };
         let col = db.get_collection(&self.collection_name).await?;
         let mut encoding = self.tokenizer.encode(snippet.clone(), true)?;
-        encoding.truncate(512, 1, TruncationDirection::Right);
+        encoding.truncate(
+            self.model_config.max_input_size,
+            1,
+            TruncationDirection::Right,
+        );
         let query = self
             .generate_embedding(encoding, self.model.clone())
             .await?;
@@ -495,7 +509,11 @@ impl SnippetRetriever {
             }
 
             let mut encoding = self.tokenizer.encode(snippet.clone(), true)?;
-            encoding.truncate(512, 1, TruncationDirection::Right);
+            encoding.truncate(
+                self.model_config.max_input_size,
+                1,
+                TruncationDirection::Right,
+            );
             let result = self.generate_embedding(encoding, self.model.clone()).await;
             let embedding = match result {
                 Ok(e) => e,

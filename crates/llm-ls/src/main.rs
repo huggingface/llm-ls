@@ -882,11 +882,6 @@ async fn main() {
         .build()
         .expect("failed to build reqwest unsafe client");
 
-    let snippet_retriever = Arc::new(RwLock::new(
-        SnippetRetriever::new(cache_dir.join("database"), 20, 10)
-            .await
-            .expect("failed to initialise snippet retriever"),
-    ));
     let config = Arc::new(
         load_config(
             cache_dir
@@ -896,6 +891,11 @@ async fn main() {
         .await
         .expect("failed to load config file"),
     );
+    let snippet_retriever = Arc::new(RwLock::new(
+        SnippetRetriever::new(cache_dir.join("embeddings"), config.model.clone(), 20, 10)
+            .await
+            .expect("failed to initialise snippet retriever"),
+    ));
     let (service, socket) = LspService::build(|client| LlmService {
         cache_dir,
         client,
