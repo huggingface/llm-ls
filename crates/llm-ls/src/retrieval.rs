@@ -621,7 +621,6 @@ impl SnippetRetriever {
             };
             col.write().await.batch_insert(zip(results, batch).map(|item| {
                 let (embedding, snippet) = item;
-                debug!("Inserting computed snippets for {0}", snippet.file_url);
                 Embedding::new(
                     embedding,
                     Some(HashMap::from([
