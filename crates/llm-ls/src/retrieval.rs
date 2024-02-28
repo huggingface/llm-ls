@@ -552,7 +552,7 @@ impl SnippetRetriever {
         let lines = file.split('\n').collect::<Vec<_>>();
         let end = end.unwrap_or(lines.len()).min(lines.len());
         let mut snippets: Vec<Snippet> = Vec::new();
-        debug!("Starting KB for file {file_url}");
+        debug!("Building embeddings for {file_url}");
         for start_line in (start..end).step_by(self.window_step) {
             let end_line = (start_line + self.window_size - 1).min(lines.len());
             if !col
