@@ -33,6 +33,7 @@ use uuid::Uuid;
 use crate::backend::{build_body, build_headers, parse_generations};
 use crate::document::Document;
 use crate::error::{internal_error, Error, Result};
+use crate::retrieval::BuildFrom;
 
 mod backend;
 mod config;
@@ -238,11 +239,21 @@ async fn build_prompt(
             after_line = after_iter.next();
         }
         let before = before.into_iter().rev().collect::<Vec<_>>().join("");
+        let query = snippet_retriever
+            .read()
+            .await
+            .build_query(
+                format!("{before}{after}"),
+                BuildFrom::Cursor {
+                    cursor_position: before.len(),
+                },
+            )
+            .await?;
         let snippets = snippet_retriever
             .read()
             .await
             .search(
-                format!("{before}{after}"),
+                &query,
                 Some(FilterBuilder::new().comparison(
                     "file_url".to_owned(),
                     Compare::Neq,
@@ -281,11 +292,16 @@ async fn build_prompt(
             before.push(line);
         }
         let prompt = before.into_iter().rev().collect::<Vec<_>>().join("");
+        let query = snippet_retriever
+            .read()
+            .await
+            .build_query(prompt.clone(), BuildFrom::End)
+            .await?;
         let snippets = snippet_retriever
             .read()
             .await
             .search(
-                prompt.clone(),
+                &query,
                 Some(FilterBuilder::new().comparison(
                     "file_url".to_owned(),
                     Compare::Neq,

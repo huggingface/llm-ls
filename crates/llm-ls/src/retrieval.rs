@@ -251,7 +251,7 @@ impl SnippetRetriever {
         })
     }
 
-    pub(crate) async fn initialse_database(&mut self, db_name: &str) -> Result<Db> {
+    pub(crate) async fn initialise_database(&mut self, db_name: &str) -> Result<Db> {
         let uri = self.cache_path.join(db_name);
         let mut db = Db::open(uri).await.expect("failed to open database");
         match db
@@ -282,13 +282,15 @@ impl SnippetRetriever {
         debug!("building workspace snippets");
         let workspace_root = PathBuf::from(workspace_root);
         if self.db.is_none() {
-            self.initialse_database(
+            self.initialise_database(&format!(
+                "{}--{}",
                 workspace_root
                     .file_name()
                     .ok_or_else(|| Error::NoFinalPath(workspace_root.clone()))?
                     .to_str()
                     .ok_or(Error::NonUnicode)?,
-            )
+                self.model_config.id.replace('/', "--"),
+            ))
             .await?;
         }
         let mut files = Vec::new();
@@ -377,9 +379,49 @@ impl SnippetRetriever {
         Ok(())
     }
 
-    pub(crate) async fn search(
+    pub(crate) async fn build_query(
         &self,
         snippet: String,
+        strategy: BuildFrom,
+    ) -> Result<Vec<f32>> {
+        match strategy {
+            BuildFrom::Start => {
+                let mut encoding = self.tokenizer.encode(snippet.clone(), true)?;
+                encoding.truncate(
+                    self.model_config.max_input_size,
+                    1,
+                    TruncationDirection::Right,
+                );
+                self.generate_embedding(encoding, self.model.clone()).await
+            }
+            BuildFrom::Cursor { cursor_position } => {
+                let (before, after) = snippet.split_at(cursor_position);
+                let mut before_encoding = self.tokenizer.encode(before, true)?;
+                let mut after_encoding = self.tokenizer.encode(after, true)?;
+                let share = self.model_config.max_input_size / 2;
+                before_encoding.truncate(share, 1, TruncationDirection::Left);
+                after_encoding.truncate(share, 1, TruncationDirection::Right);
+                before_encoding.take_overflowing();
+                after_encoding.take_overflowing();
+                before_encoding.merge_with(after_encoding, false);
+                self.generate_embedding(before_encoding, self.model.clone())
+                    .await
+            }
+            BuildFrom::End => {
+                let mut encoding = self.tokenizer.encode(snippet.clone(), true)?;
+                encoding.truncate(
+                    self.model_config.max_input_size,
+                    1,
+                    TruncationDirection::Left,
+                );
+                self.generate_embedding(encoding, self.model.clone()).await
+            }
+        }
+    }
+
+    pub(crate) async fn search(
+        &self,
+        query: &[f32],
         filter: Option<FilterBuilder>,
     ) -> Result<Vec<Snippet>> {
         let db = match self.db.as_ref() {
@@ -387,19 +429,10 @@ impl SnippetRetriever {
             None => return Err(Error::UninitialisedDatabase),
         };
         let col = db.get_collection(&self.collection_name).await?;
-        let mut encoding = self.tokenizer.encode(snippet.clone(), true)?;
-        encoding.truncate(
-            self.model_config.max_input_size,
-            1,
-            TruncationDirection::Right,
-        );
-        let query = self
-            .generate_embedding(encoding, self.model.clone())
-            .await?;
         let result = col
             .read()
             .await
-            .get(&query, 5, filter)
+            .get(query, 5, filter)
             .await?
             .iter()
             .map(TryInto::try_into)
@@ -536,4 +569,13 @@ impl SnippetRetriever {
         }
         Ok(())
     }
+}
+
+pub(crate) enum BuildFrom {
+    Cursor {
+        cursor_position: usize,
+    },
+    End,
+    #[allow(dead_code)]
+    Start,
 }
