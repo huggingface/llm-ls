@@ -32,10 +32,10 @@ pub enum Error {
     InvalidFileName,
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
+    #[error("expected value to be a valid number, got: {0}")]
+    ValueNotNumber(Value),
     #[error("expected value to be string, got: {0}")]
     ValueNotString(Value),
-    #[error("expected value to be a valid size, got: {0}")]
-    ValueNotUsize(Value),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
