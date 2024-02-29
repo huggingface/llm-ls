@@ -259,7 +259,7 @@ impl TryInto<usize> for &Value {
         if let Value::Number(n) = self {
             Ok(n as usize)
         } else {
-            Err(Error::ValueNotUsize(self.to_owned()))
+            Err(Error::ValueNotUsize(self))
         }
     }
 }
