@@ -237,11 +237,11 @@ impl TryFrom<&SimilarityResult> for Snippet {
         let start_line = meta
             .get("start_line_no")
             .ok_or_else(|| Error::MalformattedEmbeddingMetadata("snippet".to_owned()))?
-            .inner_value()?;
-        let end_line = meta
+            .try_into()?;
+        let end_line= meta
             .get("start_line_no")
             .ok_or_else(|| Error::MalformattedEmbeddingMetadata("snippet".to_owned()))?
-            .inner_value()?;
+            .try_into()?;
         Ok(Snippet { file_url, code, start_line, end_line })
     }
 }
