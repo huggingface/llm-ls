@@ -25,7 +25,7 @@ use tower_lsp::lsp_types::{
 };
 use std::iter::zip;
 use tower_lsp::Client;
-use tracing::{debug, info, error, warn, error};
+use tracing::{debug, error, warn};
 
 // TODO:
 // - create sliding window and splitting of files logic
@@ -197,22 +197,6 @@ fn device(cpu: bool) -> Result<Device> {
         }
         Ok(Device::Cpu)
     }
-}
-
-async fn initialse_database(cache_path: PathBuf) -> Db {
-    let uri = cache_path.join("database");
-    let mut db = Db::open(uri).await.expect("failed to open database");
-    match db
-        .create_collection("code-slices".to_owned(), 384, Distance::Cosine)
-        .await
-    {
-        Ok(_)
-        | Err(tinyvec_embed::error::Error::Collection(
-            tinyvec_embed::error::Collection::UniqueViolation,
-        )) => (),
-        Err(err) => panic!("failed to create collection: {err}"),
-    }
-    db
 }
 
 pub(crate) struct Snippet {
@@ -481,24 +465,15 @@ impl SnippetRetriever {
             Some(db) => db.clone(),
             None => return Err(Error::UninitialisedDatabase),
         };
-        let col = self.db.get_collection("code-slices").await?;
-        let mut encoding = self.tokenizer.encode(snippet.clone(), true)?;
-        encoding.truncate(512, 1, TruncationDirection::Right);
-        let batch = vec![encoding];
-        let query = self
-            .generate_embeddings(batch, self.model.clone())
-            .await?;
-        let result = match query.first() {
-            Some(res) => col
-                .read()
-                .await
-                .get(res, 5, filter)
-                .await?
-                .iter()
-                .map(TryInto::try_into)
-                .collect::<Result<Vec<_>>>()?,
-            _ => vec![]
-        };
+        let col = db.get_collection("code-slices").await?;
+        let result = col
+            .read()
+            .await
+            .get(query, 5, filter)
+            .await?
+            .iter()
+            .map(TryInto::try_into)
+            .collect::<Result<Vec<_>>>()?;
         Ok(result)
     }
 
