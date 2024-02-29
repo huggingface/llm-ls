@@ -232,6 +232,7 @@ impl Eq for Embedding {}
 pub enum Value {
     String(String),
     Number(f32),
+    Usize(usize),
 }
 
 impl Display for Value {
@@ -239,6 +240,7 @@ impl Display for Value {
         match self {
             Self::String(s) => write!(f, "{s}"),
             Self::Number(n) => write!(f, "{n}"),
+            Self::Usize(u) => write!(f, "{u}"),
         }
     }
 }
@@ -250,16 +252,11 @@ impl Value {
             _ => Err(Error::ValueNotString(self.to_owned())),
         }
     }
-}
 
-impl TryInto<usize> for &Value {
-    type Error = Error;
-
-    fn try_into(self) -> Result<usize> {
-        if let Value::Number(n) = self {
-            Ok(n as usize)
-        } else {
-            Err(Error::ValueNotUsize(self))
+    pub fn inner_value(&self) -> Result<usize> {
+        match self {
+            Self::Usize(s) => Ok(s.to_owned()),
+            _ => Err(Error::ValueNotString(self.to_owned())),
         }
     }
 }

@@ -22,7 +22,7 @@ use tower_lsp::lsp_types::{
 };
 use std::iter::zip;
 use tower_lsp::Client;
-use tracing::{debug, info, error, warn, error};
+use tracing::{debug, error, warn};
 
 // TODO:
 // - create sliding window and splitting of files logic
@@ -194,22 +194,6 @@ fn device(cpu: bool) -> Result<Device> {
     }
 }
 
-async fn initialse_database(cache_path: PathBuf) -> Db {
-    let uri = cache_path.join("database");
-    let mut db = Db::open(uri).await.expect("failed to open database");
-    match db
-        .create_collection("code-slices".to_owned(), 384, Distance::Cosine)
-        .await
-    {
-        Ok(_)
-        | Err(tinyvec_embed::error::Error::Collection(
-            tinyvec_embed::error::Collection::UniqueViolation,
-        )) => (),
-        Err(err) => panic!("failed to create collection: {err}"),
-    }
-    db
-}
-
 pub(crate) struct Snippet {
     pub(crate) file_url: String,
     pub(crate) code: String,
@@ -237,11 +221,11 @@ impl TryFrom<&SimilarityResult> for Snippet {
         let start_line = meta
             .get("start_line_no")
             .ok_or_else(|| Error::MalformattedEmbeddingMetadata("snippet".to_owned()))?
-            .try_into()?;
+            .inner_value()?;
         let end_line= meta
             .get("start_line_no")
             .ok_or_else(|| Error::MalformattedEmbeddingMetadata("snippet".to_owned()))?
-            .try_into()?;
+            .inner_value()?;
         Ok(Snippet { file_url, code, start_line, end_line })
     }
 }
@@ -417,7 +401,7 @@ impl SnippetRetriever {
         snippet: String,
         strategy: BuildFrom,
     ) -> Result<Vec<f32>> {
-        match strategy {
+        let result = match strategy {
             BuildFrom::Start => {
                 let mut encoding = self.tokenizer.encode(snippet.clone(), true)?;
                 encoding.truncate(
@@ -425,7 +409,7 @@ impl SnippetRetriever {
                     1,
                     TruncationDirection::Right,
                 );
-                self.generate_embedding(encoding, self.model.clone()).await
+                self.generate_embeddings(vec![encoding], self.model.clone()).await?
             }
             BuildFrom::Cursor { cursor_position } => {
                 let (before, after) = snippet.split_at(cursor_position);
@@ -437,8 +421,8 @@ impl SnippetRetriever {
                 before_encoding.take_overflowing();
                 after_encoding.take_overflowing();
                 before_encoding.merge_with(after_encoding, false);
-                self.generate_embedding(before_encoding, self.model.clone())
-                    .await
+                self.generate_embeddings(vec![before_encoding], self.model.clone())
+                    .await?
             }
             BuildFrom::End => {
                 let mut encoding = self.tokenizer.encode(snippet.clone(), true)?;
@@ -447,9 +431,14 @@ impl SnippetRetriever {
                     1,
                     TruncationDirection::Left,
                 );
-                self.generate_embedding(encoding, self.model.clone()).await
+                self.generate_embeddings(vec![encoding], self.model.clone()).await?
             }
-        }
+        };
+        let first_embedding = match result.first() {
+            Some(n) => n.clone(),
+            _ => vec![]
+        };
+        Ok(first_embedding)
     }
 
     pub(crate) async fn search(
@@ -461,24 +450,15 @@ impl SnippetRetriever {
             Some(db) => db.clone(),
             None => return Err(Error::UninitialisedDatabase),
         };
-        let col = self.db.get_collection("code-slices").await?;
-        let mut encoding = self.tokenizer.encode(snippet.clone(), true)?;
-        encoding.truncate(512, 1, TruncationDirection::Right);
-        let batch = vec![encoding];
-        let query = self
-            .generate_embeddings(batch, self.model.clone())
-            .await?;
-        let result = match query.first() {
-            Some(res) => col
-                .read()
-                .await
-                .get(res, 5, filter)
-                .await?
-                .iter()
-                .map(TryInto::try_into)
-                .collect::<Result<Vec<_>>>()?,
-            _ => vec![]
-        };
+        let col = db.get_collection("code-slices").await?;
+        let result = col
+            .read()
+            .await
+            .get(query, 5, filter)
+            .await?
+            .iter()
+            .map(TryInto::try_into)
+            .collect::<Result<Vec<_>>>()?;
         Ok(result)
     }
 
@@ -638,7 +618,7 @@ impl SnippetRetriever {
             }).collect::<Vec<Embedding>>()
             )?;
         }
-        self.db
+        db
             .save()
             .await?;
         Ok(())
