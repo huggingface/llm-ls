@@ -172,7 +172,7 @@ fn parse_openai_text(text: &str) -> Result<Vec<Generation>> {
         OpenAIAPIResponse::Generation(completion) => {
             Ok(completion.choices.into_iter().map(|x| x.into()).collect())
         }
-        OpenAIAPIResponse::Error(err) => Err(Error::OpenAI(err))
+        OpenAIAPIResponse::Error(err) => Err(Error::OpenAI(err)),
     }
 }
 
