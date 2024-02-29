@@ -260,7 +260,7 @@ impl TryInto<usize> for &Value {
 
     fn try_into(self) -> Result<usize> {
         if let Value::Number(n) = self {
-            Ok(n.clone() as usize)
+            Ok(n as usize)
         } else {
             Err(Error::ValueNotUsize(self.to_owned()))
         }
