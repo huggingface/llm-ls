@@ -135,6 +135,7 @@ struct LlmService {
     workspace_folders: Arc<RwLock<Option<Vec<WorkspaceFolder>>>>,
     tokenizer_map: Arc<RwLock<HashMap<String, Arc<Tokenizer>>>>,
     unauthenticated_warn_at: Arc<RwLock<Instant>>,
+    position_encoding: Arc<RwLock<PositionEncodingKind>>,
 }
 
 fn build_prompt(
@@ -532,6 +533,25 @@ impl LlmService {
 impl LanguageServer for LlmService {
     async fn initialize(&self, params: InitializeParams) -> LspResult<InitializeResult> {
         *self.workspace_folders.write().await = params.workspace_folders;
+        let position_encoding = params.capabilities.general.and_then(|general_capabilities| {
+            general_capabilities.position_encodings.and_then(|encodings| {
+                if encodings.contains(&PositionEncodingKind::UTF8) {
+                    Some(PositionEncodingKind::UTF8)
+                } else if encodings.contains(&PositionEncodingKind::UTF16) {
+                    Some(PositionEncodingKind::UTF16)
+                } else if encodings.contains(&PositionEncodingKind::UTF32) {
+                    Some(PositionEncodingKind::UTF32)
+                } else {
+                    // Because UTF-16 is the only mandatory encoding that the client must support,
+                    // we will use it as the default encoding.
+                    // See: https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#textDocuments
+                    Some(PositionEncodingKind::UTF16)
+                }
+            })
+        });
+
+        *self.position_encoding.write().await = position_encoding.as_ref().unwrap().clone();
+
         Ok(InitializeResult {
             server_info: Some(ServerInfo {
                 name: "llm-ls".to_owned(),
@@ -541,6 +561,7 @@ impl LanguageServer for LlmService {
                 text_document_sync: Some(TextDocumentSyncCapability::Kind(
                     TextDocumentSyncKind::INCREMENTAL,
                 )),
+                position_encoding,
                 ..Default::default()
             },
         })
@@ -599,13 +620,16 @@ impl LanguageServer for LlmService {
         let doc = document_map.get_mut(&uri);
         if let Some(doc) = doc {
             for change in &params.content_changes {
-                if let Some(range) = change.range {
-                    match doc.change(range, &change.text).await {
-                        Ok(()) => info!("{uri} changed"),
-                        Err(err) => error!("error when changing {uri}: {err}"),
-                    }
-                } else {
-                    warn!("Could not update document, got change request with missing range");
+
+                let position_encoding = match self.position_encoding.read().await.as_str() {
+                        "utf-8" => Some(document::PositionEncodingKind::UTF8),
+                        "utf-16" => Some(document::PositionEncodingKind::UTF16),
+                        "utf-32" => Some(document::PositionEncodingKind::UTF32),
+                        _ => Some(document::PositionEncodingKind::UTF16),
+                };
+                match doc.apply_content_change(change, position_encoding.unwrap()) {
+                    Ok(()) => info!("{uri} changed"),
+                    Err(err) => error!("error when changing {uri}: {err}"),
                 }
             }
         } else {
@@ -685,6 +709,7 @@ async fn main() {
     let (service, socket) = LspService::build(|client| LlmService {
         cache_dir,
         client,
+        position_encoding: Arc::new(RwLock::new(PositionEncodingKind::UTF16)),
         document_map: Arc::new(RwLock::new(HashMap::new())),
         http_client,
         unsafe_http_client,
