@@ -533,22 +533,27 @@ impl LlmService {
 impl LanguageServer for LlmService {
     async fn initialize(&self, params: InitializeParams) -> LspResult<InitializeResult> {
         *self.workspace_folders.write().await = params.workspace_folders;
-        let position_encoding = params.capabilities.general.and_then(|general_capabilities| {
-            general_capabilities.position_encodings.and_then(|encodings| {
-                if encodings.contains(&PositionEncodingKind::UTF8) {
-                    Some(PositionEncodingKind::UTF8)
-                } else if encodings.contains(&PositionEncodingKind::UTF16) {
-                    Some(PositionEncodingKind::UTF16)
-                } else if encodings.contains(&PositionEncodingKind::UTF32) {
-                    Some(PositionEncodingKind::UTF32)
-                } else {
-                    // Because UTF-16 is the only mandatory encoding that the client must support,
-                    // we will use it as the default encoding.
-                    // See: https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#textDocuments
-                    Some(PositionEncodingKind::UTF16)
-                }
-            })
-        });
+        let position_encoding = params
+            .capabilities
+            .general
+            .and_then(|general_capabilities| {
+                general_capabilities
+                    .position_encodings
+                    .and_then(|encodings| {
+                        if encodings.contains(&PositionEncodingKind::UTF8) {
+                            Some(PositionEncodingKind::UTF8)
+                        } else if encodings.contains(&PositionEncodingKind::UTF16) {
+                            Some(PositionEncodingKind::UTF16)
+                        } else if encodings.contains(&PositionEncodingKind::UTF32) {
+                            Some(PositionEncodingKind::UTF32)
+                        } else {
+                            // Because UTF-16 is the only mandatory encoding that the client must support,
+                            // we will use it as the default encoding.
+                            // See: https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#textDocuments
+                            Some(PositionEncodingKind::UTF16)
+                        }
+                    })
+            });
 
         *self.position_encoding.write().await = position_encoding.as_ref().unwrap().clone();
 
@@ -620,12 +625,11 @@ impl LanguageServer for LlmService {
         let doc = document_map.get_mut(&uri);
         if let Some(doc) = doc {
             for change in &params.content_changes {
-
                 let position_encoding = match self.position_encoding.read().await.as_str() {
-                        "utf-8" => Some(document::PositionEncodingKind::UTF8),
-                        "utf-16" => Some(document::PositionEncodingKind::UTF16),
-                        "utf-32" => Some(document::PositionEncodingKind::UTF32),
-                        _ => Some(document::PositionEncodingKind::UTF16),
+                    "utf-8" => Some(document::PositionEncodingKind::UTF8),
+                    "utf-16" => Some(document::PositionEncodingKind::UTF16),
+                    "utf-32" => Some(document::PositionEncodingKind::UTF32),
+                    _ => Some(document::PositionEncodingKind::UTF16),
                 };
                 match doc.apply_content_change(change, position_encoding.unwrap()) {
                     Ok(()) => info!("{uri} changed"),

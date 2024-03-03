@@ -1,8 +1,8 @@
-use ropey::{Rope, RopeSlice, Error as RopeyError};
-use tower_lsp::lsp_types::{ TextDocumentContentChangeEvent, Position};
+use ropey::{Error as RopeyError, Rope, RopeSlice};
+use tower_lsp::lsp_types::{Position, TextDocumentContentChangeEvent};
 use tree_sitter::{InputEdit, Parser, Point, Tree};
 
-use crate::error::{Result, Error as LspError};
+use crate::error::{Error as LspError, Result};
 use crate::language_id::LanguageId;
 
 fn get_parser(language_id: LanguageId) -> Result<Parser> {
@@ -182,7 +182,10 @@ impl Document {
                 let change_start_line = match self.text.get_line(change_start_line_idx) {
                     Some(line) => line,
                     None => {
-                        return Err(LspError::Rope(RopeyError::LineIndexOutOfBounds(change_start_line_idx, self.text.len_lines())));
+                        return Err(LspError::Rope(RopeyError::LineIndexOutOfBounds(
+                            change_start_line_idx,
+                            self.text.len_lines(),
+                        )));
                     }
                 };
 
@@ -196,7 +199,10 @@ impl Document {
                     false => match self.text.get_line(change_end_line_idx) {
                         Some(line) => line,
                         None => {
-                            return Err(LspError::Rope(RopeyError::LineIndexOutOfBounds(change_end_line_idx, self.text.len_lines())));
+                            return Err(LspError::Rope(RopeyError::LineIndexOutOfBounds(
+                                change_end_line_idx,
+                                self.text.len_lines(),
+                            )));
                         }
                     },
                 };
