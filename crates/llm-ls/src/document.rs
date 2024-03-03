@@ -222,7 +222,7 @@ impl Document {
                         PositionEncodingKind::UTF32 => Ok(position.character as usize),
                     }
                     .map_err(|err| {
-                        return LspError::Rope(err);
+                        LspError::Rope(err)
                     })
                 }
 
@@ -310,13 +310,13 @@ impl Document {
                                 .expect("parse should always return a tree when the language was set and no timeout was specified"));
                 }
 
-                return Ok(());
+                Ok(())
             }
             None => {
                 self.text = Rope::from_str(&change.text);
                 self.tree = self.parser.parse(&change.text, None);
 
-                return Ok(());
+                Ok(())
             }
         }
     }

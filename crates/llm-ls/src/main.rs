@@ -539,18 +539,18 @@ impl LanguageServer for LlmService {
             .and_then(|general_capabilities| {
                 general_capabilities
                     .position_encodings
-                    .and_then(|encodings| {
+                    .map(|encodings| {
                         if encodings.contains(&PositionEncodingKind::UTF8) {
-                            Some(PositionEncodingKind::UTF8)
+                            PositionEncodingKind::UTF8
                         } else if encodings.contains(&PositionEncodingKind::UTF16) {
-                            Some(PositionEncodingKind::UTF16)
+                            PositionEncodingKind::UTF16
                         } else if encodings.contains(&PositionEncodingKind::UTF32) {
-                            Some(PositionEncodingKind::UTF32)
+                            PositionEncodingKind::UTF32
                         } else {
                             // Because UTF-16 is the only mandatory encoding that the client must support,
                             // we will use it as the default encoding.
                             // See: https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#textDocuments
-                            Some(PositionEncodingKind::UTF16)
+                            PositionEncodingKind::UTF16
                         }
                     })
             });
