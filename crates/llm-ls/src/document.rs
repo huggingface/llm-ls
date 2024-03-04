@@ -321,3 +321,259 @@ impl Document {
         }
     }
 }
+
+#[cfg(test)]
+mod test {
+    use tower_lsp::lsp_types::{Position, Range};
+    use tree_sitter::Node;
+
+    use super::*;
+
+    macro_rules! new_change {
+        ($start_line:expr, $start_char:expr, $end_line:expr, $end_char:expr, $text:expr) => {
+            &TextDocumentContentChangeEvent {
+                range: Some(Range::new(
+                    Position::new($start_line as u32, $start_char as u32),
+                    Position::new($end_line as u32, $end_char as u32),
+                )),
+                range_length: None,
+                text: $text.to_string(),
+            }
+        };
+    }
+
+    #[tokio::test]
+    async fn test_text_document_apply_content_change() {
+        let mut rope = Rope::from_str("🤗 Hello 🤗\nABC 🇫🇷\n world!");
+        let mut doc = Document::open("unknown", &rope.to_string()).await.unwrap();
+
+        doc.apply_content_change(new_change!(0, 0, 0, 3, ""), PositionEncodingKind::UTF16)
+            .unwrap();
+        rope = Rope::from_str("Hello 🤗\nABC 🇫🇷\n world!");
+        assert_eq!(doc.text.to_string(), rope.to_string());
+
+        doc.apply_content_change(
+            new_change!(1, 4 + "🇫🇷".len(), 1, 4 + "🇫🇷".len(), " DEF"),
+            PositionEncodingKind::UTF8,
+        )
+        .unwrap();
+        rope = Rope::from_str("Hello 🤗\nABC 🇫🇷 DEF\n world!");
+        assert_eq!(doc.text.to_string(), rope.to_string());
+
+        doc.apply_content_change(
+            new_change!(1, 0, 1, 4 + "🇫🇷".chars().count() + 4, ""),
+            PositionEncodingKind::UTF32,
+        )
+        .unwrap();
+        rope = Rope::from_str("Hello 🤗\n\n world!");
+        assert_eq!(doc.text.to_string(), rope.to_string());
+
+        doc.apply_content_change(new_change!(1, 0, 1, 1, ""), PositionEncodingKind::UTF16)
+            .unwrap();
+        rope = Rope::from_str("Hello 🤗\n world!");
+        assert_eq!(doc.text.to_string(), rope.to_string());
+
+        doc.apply_content_change(new_change!(0, 5, 1, 1, "，"), PositionEncodingKind::UTF16)
+            .unwrap();
+        rope = Rope::from_str("Hello，world!");
+        assert_eq!(doc.text.to_string(), rope.to_string());
+
+        doc.apply_content_change(
+            new_change!(0, 0, 0, rope.len_utf16_cu(), ""),
+            PositionEncodingKind::UTF16,
+        )
+        .unwrap();
+        assert_eq!(doc.text.to_string(), "");
+    }
+
+    #[tokio::test]
+    async fn test_text_document_apply_content_change_no_range() {
+        let mut rope = Rope::from_str(
+            "let a = '🥸 你好';\rfunction helloWorld() { return '🤲🏿'; }\nlet b = 'Hi, 😊';",
+        );
+        let mut doc = Document::open(&LanguageId::JavaScript.to_string(), &rope.to_string()).await.unwrap();
+        let mut parser = Parser::new();
+
+        parser
+            .set_language(tree_sitter_javascript::language())
+            .unwrap();
+
+        assert!(doc.apply_content_change(
+            &TextDocumentContentChangeEvent {
+                range: None,
+                range_length: None,
+                text: "let a = '🥸 你好';\rfunction helloWorld() { return '🤲🏿'; }\nlet b = 'Hi, 😊';".to_owned(),
+            },
+            PositionEncodingKind::UTF16,
+        ).is_ok());
+        assert_eq!(doc.text.to_string(), rope.to_string());
+
+        let tree = parser.parse(&rope.to_string(), None).unwrap();
+
+        assert!(nodes_are_equal_recursive(
+            &doc.tree.as_ref().unwrap().root_node(),
+            &tree.root_node()
+        ));
+
+        assert!(doc
+            .apply_content_change(
+                &TextDocumentContentChangeEvent {
+                    range: None,
+                    range_length: None,
+                    text: "let a = '🥸 你好，😊';".to_owned(),
+                },
+                PositionEncodingKind::UTF16,
+            )
+            .is_ok());
+        rope = Rope::from_str("let a = '🥸 你好，😊';");
+        assert_eq!(doc.text.to_string(), rope.to_string());
+
+        let tree = parser.parse(&rope.to_string(), None).unwrap();
+
+        assert!(nodes_are_equal_recursive(
+            &doc.tree.as_ref().unwrap().root_node(),
+            &tree.root_node()
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_text_document_apply_content_change_bounds() {
+        let rope = Rope::from_str("");
+        let mut doc = Document::open(&LanguageId::Unknown.to_string(), &rope.to_string()).await.unwrap();
+
+        assert!(doc
+            .apply_content_change(new_change!(0, 0, 0, 1, ""), PositionEncodingKind::UTF16)
+            .is_err());
+
+        assert!(doc
+            .apply_content_change(new_change!(1, 0, 1, 0, ""), PositionEncodingKind::UTF16)
+            .is_err());
+
+        assert!(doc
+            .apply_content_change(new_change!(0, 0, 0, 0, "🤗"), PositionEncodingKind::UTF16)
+            .is_ok());
+        let rope = Rope::from_str("🤗");
+        assert_eq!(doc.text.to_string(), rope.to_string());
+
+        assert!(doc
+            .apply_content_change(
+                new_change!(0, rope.len_utf16_cu(), 0, rope.len_utf16_cu(), "\r\n"),
+                PositionEncodingKind::UTF16
+            )
+            .is_ok());
+        let rope = Rope::from_str("🤗\r\n");
+        assert_eq!(doc.text.to_string(), rope.to_string());
+
+        assert!(doc
+            .apply_content_change(
+                new_change!(0, '🤗'.len_utf16(), 0, '🤗'.len_utf16(), "\n"),
+                PositionEncodingKind::UTF16
+            )
+            .is_ok());
+        let rope = Rope::from_str("🤗\n\r\n");
+        assert_eq!(doc.text.to_string(), rope.to_string());
+
+        assert!(doc
+            .apply_content_change(
+                new_change!(0, '🤗'.len_utf16(), 2, 0, ""),
+                PositionEncodingKind::UTF16
+            )
+            .is_ok());
+        let rope = Rope::from_str("🤗");
+        assert_eq!(doc.text.to_string(), rope.to_string());
+    }
+
+    #[tokio::test]
+    // Ensure that the three stays consistent across updates.
+    async fn test_document_update_tree_consistency_easy() {
+        let a = "let a = '你好';\rlet b = 'Hi, 😊';";
+
+        let mut document = Document::open(&LanguageId::JavaScript.to_string(), a).await.unwrap();
+
+        document
+            .apply_content_change(new_change!(0, 9, 0, 11, "𐐀"), PositionEncodingKind::UTF16)
+            .unwrap();
+
+        let b = "let a = '𐐀';\rlet b = 'Hi, 😊';";
+
+        assert_eq!(document.text.to_string(), b);
+
+        let mut parser = Parser::new();
+
+        parser
+            .set_language(tree_sitter_javascript::language())
+            .unwrap();
+
+        let b_tree = parser.parse(b, None).unwrap();
+
+        assert!(nodes_are_equal_recursive(
+            &document.tree.unwrap().root_node(),
+            &b_tree.root_node()
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_document_update_tree_consistency_medium() {
+        let a = "let a = '🥸 你好';\rfunction helloWorld() { return '🤲🏿'; }\nlet b = 'Hi, 😊';";
+
+        let mut document = Document::open(&LanguageId::JavaScript.to_string(), a).await.unwrap();
+
+        document
+            .apply_content_change(new_change!(0, 14, 2, 13, "，"), PositionEncodingKind::UTF16)
+            .unwrap();
+
+        let b = "let a = '🥸 你好，😊';";
+
+        assert_eq!(document.text.to_string(), b);
+
+        let mut parser = Parser::new();
+
+        parser
+            .set_language(tree_sitter_javascript::language())
+            .unwrap();
+
+        let b_tree = parser.parse(b, None).unwrap();
+
+        assert!(nodes_are_equal_recursive(
+            &document.tree.unwrap().root_node(),
+            &b_tree.root_node()
+        ));
+    }
+
+    fn nodes_are_equal_recursive(node1: &Node, node2: &Node) -> bool {
+        if node1.kind() != node2.kind() {
+            return false;
+        }
+
+        if node1.start_byte() != node2.start_byte() {
+            return false;
+        }
+
+        if node1.end_byte() != node2.end_byte() {
+            return false;
+        }
+
+        if node1.start_position() != node2.start_position() {
+            return false;
+        }
+
+        if node1.end_position() != node2.end_position() {
+            return false;
+        }
+
+        if node1.child_count() != node2.child_count() {
+            return false;
+        }
+
+        for i in 0..node1.child_count() {
+            let child1 = node1.child(i).unwrap();
+            let child2 = node2.child(i).unwrap();
+
+            if !nodes_are_equal_recursive(&child1, &child2) {
+                return false;
+            }
+        }
+
+        true
+    }
+}
