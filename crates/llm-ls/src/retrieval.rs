@@ -465,7 +465,7 @@ impl SnippetRetriever {
             Some(db) => db.clone(),
             None => return Err(Error::UninitialisedDatabase),
         };
-        let col = db.get_collection("code-slices").await?;
+        let col = db.get_collection(&self.collection_name).await?;
         let result = col
             .read()
             .await
