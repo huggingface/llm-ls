@@ -16,14 +16,13 @@ use tokenizers::{
     Encoding, PaddingDirection, PaddingParams, PaddingStrategy, Tokenizer, TruncationDirection,
 };
 use tokio::io::AsyncReadExt;
-use tokio::task::{spawn_blocking};
+use tokio::task::spawn_blocking;
 use tokio::time::Instant;
 use tower_lsp::lsp_types::notification::Progress;
 use tower_lsp::lsp_types::{
     NumberOrString, ProgressParams, ProgressParamsValue, Range, WorkDoneProgress,
     WorkDoneProgressReport,
 };
-use std::iter::zip;
 use tower_lsp::Client;
 use tracing::{debug, error, warn};
 
