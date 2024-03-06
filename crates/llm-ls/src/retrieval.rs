@@ -7,20 +7,22 @@ use candle_transformers::models::bert::{BertModel, Config, DTYPE};
 use gitignore::Gitignore;
 use hf_hub::{api::tokio::Api, Repo, RepoType};
 use std::collections::{HashMap, VecDeque};
+use std::iter::zip;
 use std::path::Path;
 use std::{path::PathBuf, sync::Arc};
 use tinyvec_embed::db::{Collection, Compare, Db, Embedding, FilterBuilder, SimilarityResult};
 use tinyvec_embed::similarity::Distance;
-use tokenizers::{Encoding, Tokenizer, TruncationDirection, PaddingStrategy, PaddingDirection, PaddingParams};
+use tokenizers::{
+    Encoding, PaddingDirection, PaddingParams, PaddingStrategy, Tokenizer, TruncationDirection,
+};
 use tokio::io::AsyncReadExt;
-use tokio::task::{spawn_blocking};
+use tokio::task::spawn_blocking;
 use tokio::time::Instant;
 use tower_lsp::lsp_types::notification::Progress;
 use tower_lsp::lsp_types::{
     NumberOrString, ProgressParams, ProgressParamsValue, Range, WorkDoneProgress,
     WorkDoneProgressReport,
 };
-use std::iter::zip;
 use tower_lsp::Client;
 use tracing::{debug, error, warn};
 
@@ -157,13 +159,15 @@ async fn build_model_and_tokenizer(
     let config = tokio::fs::read_to_string(config_filename).await?;
     let config: Config = serde_json::from_str(&config)?;
     let mut tokenizer: Tokenizer = Tokenizer::from_file(tokenizer_filename)?;
-    tokenizer.with_padding(Some(PaddingParams { strategy: PaddingStrategy::BatchLongest,
+    tokenizer.with_padding(Some(PaddingParams {
+        strategy: PaddingStrategy::BatchLongest,
         direction: PaddingDirection::Right,
         pad_to_multiple_of: Some(8),
         // TODO: use values provided in model config
         pad_id: 0,
         pad_type_id: 0,
-        pad_token: "<pad>".to_string()}));
+        pad_token: "<pad>".to_string(),
+    }));
     tokenizer.with_truncation(None)?;
     let vb = VarBuilder::from_pth(&weights_filename, DTYPE, &device)?;
     let model = BertModel::load(vb, &config)?;
@@ -222,11 +226,16 @@ impl TryFrom<&SimilarityResult> for Snippet {
             .get("start_line_no")
             .ok_or_else(|| Error::MalformattedEmbeddingMetadata("snippet".to_owned()))?
             .try_into()?;
-        let end_line= meta
+        let end_line = meta
             .get("start_line_no")
             .ok_or_else(|| Error::MalformattedEmbeddingMetadata("snippet".to_owned()))?
             .try_into()?;
-        Ok(Snippet { file_url, code, start_line, end_line })
+        Ok(Snippet {
+            file_url,
+            code,
+            start_line,
+            end_line,
+        })
     }
 }
 
@@ -377,7 +386,10 @@ impl SnippetRetriever {
                 })
                 .await;
         }
-        debug!("Built workspace snippets in {} ms", start.elapsed().as_millis());
+        debug!(
+            "Built workspace snippets in {} ms",
+            start.elapsed().as_millis()
+        );
         Ok(())
     }
 
@@ -409,7 +421,8 @@ impl SnippetRetriever {
                     1,
                     TruncationDirection::Right,
                 );
-                self.generate_embeddings(vec![encoding], self.model.clone()).await?
+                self.generate_embeddings(vec![encoding], self.model.clone())
+                    .await?
             }
             BuildFrom::Cursor { cursor_position } => {
                 let (before, after) = snippet.split_at(cursor_position);
@@ -431,13 +444,15 @@ impl SnippetRetriever {
                     1,
                     TruncationDirection::Left,
                 );
-                self.generate_embeddings(vec![encoding], self.model.clone()).await?
+                self.generate_embeddings(vec![encoding], self.model.clone())
+                    .await?
             }
         };
-        match result.first() {
-            Some(n) => Ok(n.clone()),
-            _ => Err(Error::MissingEmbedding),
+        if result.is_empty() {
+            return Err(Error::MissingEmbedding);
         }
+        let mut result = result;
+        Ok(result.remove(0))
     }
 
     pub(crate) async fn search(
@@ -508,9 +523,7 @@ impl SnippetRetriever {
         let embedding = spawn_blocking(move || -> Result<Vec<Vec<f32>>> {
             let tokens = encodings
                 .iter()
-                .map(|elem| {
-                    Ok(Tensor::new(elem.get_ids().to_vec(), &model.device)?)
-                } )
+                .map(|elem| Ok(Tensor::new(elem.get_ids().to_vec(), &model.device)?))
                 .collect::<Result<Vec<_>>>()?;
             let token_ids = Tensor::stack(&tokens, 0)?;
             let token_type_ids = token_ids.zeros_like()?;
@@ -566,10 +579,15 @@ impl SnippetRetriever {
             let window = lines[start_line..end_line].to_vec();
             let snippet = window.join("\n");
             if snippet.is_empty() {
-                    debug!("snippet {file_url}[{start_line}, {end_line}] empty");
-                    continue;
+                debug!("snippet {file_url}[{start_line}, {end_line}] empty");
+                continue;
             }
-            snippets.push(Snippet{ file_url: file_url.clone().into(), code: snippet, start_line, end_line });
+            snippets.push(Snippet {
+                file_url: file_url.clone().into(),
+                code: snippet,
+                start_line,
+                end_line,
+            });
         }
         {
             let nb_snippets = snippets.len();
@@ -581,7 +599,8 @@ impl SnippetRetriever {
         let snippets = spawn_blocking(|| -> Result<Vec<Snippet>> {
             snippets.sort_unstable_by(|first, second| first.code.len().cmp(&second.code.len()));
             Ok(snippets)
-        }).await?;
+        })
+        .await?;
 
         // TODO: improvements to compute an efficient batch size:
         //  - batch size should be relative to the cumulative size of all elements in the batch,
@@ -591,11 +610,9 @@ impl SnippetRetriever {
             _ => 8,
         };
         for batch in snippets?.chunks(embedding_batch_size) {
-            let batch_code = batch
-                .iter()
-                .map(|snippet| snippet.code.clone())
-                .collect();
-            let encodings = self.tokenizer
+            let batch_code = batch.iter().map(|snippet| snippet.code.clone()).collect();
+            let encodings = self
+                .tokenizer
                 .encode_batch(batch_code, true)?
                 .iter_mut()
                 .map(|encoding| {
@@ -603,23 +620,27 @@ impl SnippetRetriever {
                     encoding.clone()
                 })
                 .collect();
-            let results = self.generate_embeddings(encodings, self.model.clone()).await?;
-            col.write().await.batch_insert(zip(results, batch).map(|item| {
-                let (embedding, snippet) = item;
-                Embedding::new(
-                    embedding,
-                    Some(HashMap::from([
-                        ("file_url".to_owned(), snippet.file_url.clone().into()),
-                        ("start_line_no".to_owned(), snippet.start_line.into()),
-                        ("end_line_no".to_owned(), snippet.end_line.into()),
-                        ("snippet".to_owned(), snippet.code.clone().into()),
-                    ])))
-            }).collect::<Vec<Embedding>>()
+            let results = self
+                .generate_embeddings(encodings, self.model.clone())
+                .await?;
+            col.write().await.batch_insert(
+                zip(results, batch)
+                    .map(|item| {
+                        let (embedding, snippet) = item;
+                        Embedding::new(
+                            embedding,
+                            Some(HashMap::from([
+                                ("file_url".to_owned(), snippet.file_url.clone().into()),
+                                ("start_line_no".to_owned(), snippet.start_line.into()),
+                                ("end_line_no".to_owned(), snippet.end_line.into()),
+                                ("snippet".to_owned(), snippet.code.clone().into()),
+                            ])),
+                        )
+                    })
+                    .collect::<Vec<Embedding>>(),
             )?;
         }
-        db
-            .save()
-            .await?;
+        db.save().await?;
         Ok(())
     }
 }

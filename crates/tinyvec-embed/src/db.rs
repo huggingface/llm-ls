@@ -174,7 +174,10 @@ impl Collection {
     }
 
     pub fn batch_insert(&mut self, embeddings: Vec<Embedding>) -> Result<()> {
-        if embeddings.iter().any(|embedding| embedding.vector.len() != self.dimension) {
+        if embeddings
+            .iter()
+            .any(|embedding| embedding.vector.len() != self.dimension)
+        {
             return Err(CollectionError::DimensionMismatch.into());
         }
         self.embeddings.extend(embeddings);
@@ -259,7 +262,7 @@ impl TryInto<usize> for &Value {
         if let Value::Number(n) = self {
             Ok(n.clone() as usize)
         } else {
-            Err(Error::ValueNotUsize(self.to_owned()))
+            Err(Error::ValueNotNumber(self.to_owned()))
         }
     }
 }
