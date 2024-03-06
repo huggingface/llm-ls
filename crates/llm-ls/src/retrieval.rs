@@ -221,11 +221,11 @@ impl TryFrom<&SimilarityResult> for Snippet {
         let start_line = meta
             .get("start_line_no")
             .ok_or_else(|| Error::MalformattedEmbeddingMetadata("snippet".to_owned()))?
-            .inner_value()?;
+            .try_into()?;
         let end_line= meta
             .get("start_line_no")
             .ok_or_else(|| Error::MalformattedEmbeddingMetadata("snippet".to_owned()))?
-            .inner_value()?;
+            .try_into()?;
         Ok(Snippet { file_url, code, start_line, end_line })
     }
 }
@@ -434,11 +434,10 @@ impl SnippetRetriever {
                 self.generate_embeddings(vec![encoding], self.model.clone()).await?
             }
         };
-        let first_embedding = match result.first() {
-            Some(n) => n.clone(),
-            _ => vec![]
-        };
-        Ok(first_embedding)
+        match result.first() {
+            Some(n) => Ok(n.clone()),
+            _ => Err(Error::MissingEmbedding),
+        }
     }
 
     pub(crate) async fn search(
@@ -450,7 +449,7 @@ impl SnippetRetriever {
             Some(db) => db.clone(),
             None => return Err(Error::UninitialisedDatabase),
         };
-        let col = db.get_collection("code-slices").await?;
+        let col = db.get_collection(&self.collection_name).await?;
         let result = col
             .read()
             .await
