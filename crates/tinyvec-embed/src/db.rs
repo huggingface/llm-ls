@@ -173,6 +173,17 @@ impl Collection {
         Ok(())
     }
 
+    pub fn batch_insert(&mut self, embeddings: Vec<Embedding>) -> Result<()> {
+        if embeddings
+            .iter()
+            .any(|embedding| embedding.vector.len() != self.dimension)
+        {
+            return Err(CollectionError::DimensionMismatch.into());
+        }
+        self.embeddings.extend(embeddings);
+        Ok(())
+    }
+
     /// Remove values matching filter.
     ///
     /// Empties the collection when `filter` is `None`.
@@ -240,6 +251,18 @@ impl Value {
         match self {
             Self::String(s) => Ok(s.to_owned()),
             _ => Err(Error::ValueNotString(self.to_owned())),
+        }
+    }
+}
+
+impl TryInto<usize> for &Value {
+    type Error = Error;
+
+    fn try_into(self) -> Result<usize> {
+        if let Value::Number(n) = self {
+            Ok(n.clone() as usize)
+        } else {
+            Err(Error::ValueNotNumber(self.to_owned()))
         }
     }
 }

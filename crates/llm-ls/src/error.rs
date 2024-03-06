@@ -79,6 +79,8 @@ pub enum Error {
     UnknownBackend(String),
     #[error("yaml serialization error: {0}")]
     Yaml(#[from] serde_yaml::Error),
+    #[error("No embedding built")]
+    MissingEmbedding,
 }
 
 pub(crate) type Result<T> = std::result::Result<T, Error>;
