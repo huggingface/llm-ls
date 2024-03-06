@@ -39,7 +39,7 @@ fn get_position_idx(rope: &Rope, row: usize, col: usize) -> Result<usize> {
     Ok(rope.try_line_to_char(row)?
         + col.min(
             rope.get_line(row.min(rope.len_lines().saturating_sub(1)))
-                .ok_or(Error::OutOfBoundLine(row))?
+                .ok_or(Error::OutOfBoundLine(row, rope.len_lines()))?
                 .len_chars()
                 .saturating_sub(1),
         ))
@@ -135,7 +135,7 @@ struct LlmService {
     workspace_folders: Arc<RwLock<Option<Vec<WorkspaceFolder>>>>,
     tokenizer_map: Arc<RwLock<HashMap<String, Arc<Tokenizer>>>>,
     unauthenticated_warn_at: Arc<RwLock<Instant>>,
-    position_encoding: Arc<RwLock<PositionEncodingKind>>,
+    position_encoding: Arc<RwLock<document::PositionEncodingKind>>,
 }
 
 fn build_prompt(
@@ -539,23 +539,10 @@ impl LanguageServer for LlmService {
             .and_then(|general_capabilities| {
                 general_capabilities
                     .position_encodings
-                    .map(|encodings| {
-                        if encodings.contains(&PositionEncodingKind::UTF8) {
-                            PositionEncodingKind::UTF8
-                        } else if encodings.contains(&PositionEncodingKind::UTF16) {
-                            PositionEncodingKind::UTF16
-                        } else if encodings.contains(&PositionEncodingKind::UTF32) {
-                            PositionEncodingKind::UTF32
-                        } else {
-                            // Because UTF-16 is the only mandatory encoding that the client must support,
-                            // we will use it as the default encoding.
-                            // See: https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#textDocuments
-                            PositionEncodingKind::UTF16
-                        }
-                    })
-            });
+                    .map(TryFrom::try_from)
+            }).unwrap_or(Ok(document::PositionEncodingKind::Utf16))?;
 
-        *self.position_encoding.write().await = position_encoding.as_ref().unwrap().clone();
+        *self.position_encoding.write().await = position_encoding;
 
         Ok(InitializeResult {
             server_info: Some(ServerInfo {
@@ -566,7 +553,7 @@ impl LanguageServer for LlmService {
                 text_document_sync: Some(TextDocumentSyncCapability::Kind(
                     TextDocumentSyncKind::INCREMENTAL,
                 )),
-                position_encoding,
+                position_encoding: Some(position_encoding.to_lsp_types()),
                 ..Default::default()
             },
         })
@@ -625,13 +612,7 @@ impl LanguageServer for LlmService {
         let doc = document_map.get_mut(&uri);
         if let Some(doc) = doc {
             for change in &params.content_changes {
-                let position_encoding = match self.position_encoding.read().await.as_str() {
-                    "utf-8" => Some(document::PositionEncodingKind::UTF8),
-                    "utf-16" => Some(document::PositionEncodingKind::UTF16),
-                    "utf-32" => Some(document::PositionEncodingKind::UTF32),
-                    _ => Some(document::PositionEncodingKind::UTF16),
-                };
-                match doc.apply_content_change(change, position_encoding.unwrap()) {
+                match doc.apply_content_change(change, *self.position_encoding.read().await) {
                     Ok(()) => info!("{uri} changed"),
                     Err(err) => error!("error when changing {uri}: {err}"),
                 }
@@ -713,7 +694,7 @@ async fn main() {
     let (service, socket) = LspService::build(|client| LlmService {
         cache_dir,
         client,
-        position_encoding: Arc::new(RwLock::new(PositionEncodingKind::UTF16)),
+        position_encoding: Arc::new(RwLock::new(document::PositionEncodingKind::Utf16)),
         document_map: Arc::new(RwLock::new(HashMap::new())),
         http_client,
         unsafe_http_client,

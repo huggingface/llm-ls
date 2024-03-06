@@ -1,6 +1,6 @@
 use std::fmt::Display;
 
-use tower_lsp::jsonrpc::Error as LspError;
+use tower_lsp::{jsonrpc::Error as LspError, lsp_types::Range};
 use tracing::error;
 
 pub(crate) fn internal_error<E: Display>(err: E) -> LspError {
@@ -35,10 +35,12 @@ pub enum Error {
     OpenAI(crate::backend::OpenAIError),
     #[error("index out of bounds: {0}")]
     OutOfBoundIndexing(usize),
-    #[error("line out of bounds: {0}")]
-    OutOfBoundLine(usize),
+    #[error("line out of bounds: {0}..{1}")]
+    OutOfBoundLine(usize, usize),
     #[error("slice out of bounds: {0}..{1}")]
     OutOfBoundSlice(usize, usize),
+    #[error("range out of bounds: {0:?}")]
+    InvalidRange(Range),
     #[error("rope error: {0}")]
     Rope(#[from] ropey::Error),
     #[error("serde json error: {0}")]
@@ -53,6 +55,10 @@ pub enum Error {
     TokioJoin(#[from] tokio::task::JoinError),
     #[error("unknown backend: {0}")]
     UnknownBackend(String),
+    #[error("unknown encoding kind: {0}")]
+    UnknownEncodingKind(String),
+    #[error("no encoding kind provided by the client")]
+    EncodingKindMissing
 }
 
 pub(crate) type Result<T> = std::result::Result<T, Error>;

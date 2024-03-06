@@ -1,8 +1,8 @@
-use ropey::{Error as RopeyError, Rope, RopeSlice};
+use ropey::{Rope, RopeSlice};
 use tower_lsp::lsp_types::{Position, TextDocumentContentChangeEvent};
 use tree_sitter::{InputEdit, Parser, Point, Tree};
 
-use crate::error::{Error as LspError, Result};
+use crate::error::{Error, Result};
 use crate::language_id::LanguageId;
 
 fn get_parser(language_id: LanguageId) -> Result<Parser> {
@@ -130,11 +130,51 @@ fn get_parser(language_id: LanguageId) -> Result<Parser> {
 /// We redeclare this enum here because the `lsp_types` crate exports a Cow
 /// type that is unconvenient to deal with.
 pub enum PositionEncodingKind {
-    #[allow(dead_code)]
-    UTF8,
-    UTF16,
-    #[allow(dead_code)]
-    UTF32,
+    Utf8,
+    Utf16,
+    Utf32,
+}
+
+impl TryFrom<tower_lsp::lsp_types::PositionEncodingKind> for PositionEncodingKind {
+    type Error = Error;
+
+    fn try_from(value: tower_lsp::lsp_types::PositionEncodingKind) -> Result<Self> {
+        if value == tower_lsp::lsp_types::PositionEncodingKind::UTF8 {
+            Ok(PositionEncodingKind::Utf8)
+        } else if value == tower_lsp::lsp_types::PositionEncodingKind::UTF16 {
+            Ok(PositionEncodingKind::Utf16)
+        } else if value == tower_lsp::lsp_types::PositionEncodingKind::UTF32 {
+            Ok(PositionEncodingKind::Utf32)
+        } else {
+            Err(Error::UnknownEncodingKind(value.as_str().to_string()))
+        }
+    }
+}
+
+impl TryFrom<Vec<tower_lsp::lsp_types::PositionEncodingKind>> for PositionEncodingKind {
+    type Error = Error;
+
+    fn try_from(value: Vec<tower_lsp::lsp_types::PositionEncodingKind>) -> Result<Self> {
+        if value.contains(&tower_lsp::lsp_types::PositionEncodingKind::UTF8) {
+            Ok(PositionEncodingKind::Utf8)
+        } else if value.contains(&tower_lsp::lsp_types::PositionEncodingKind::UTF16) {
+            Ok(PositionEncodingKind::Utf16)
+        } else if value.contains(&tower_lsp::lsp_types::PositionEncodingKind::UTF32) {
+            Ok(PositionEncodingKind::Utf32)
+        } else {
+            Err(Error::EncodingKindMissing)
+        }
+    }
+}
+
+impl PositionEncodingKind {
+    pub fn to_lsp_types(&self) -> tower_lsp::lsp_types::PositionEncodingKind {
+        match self {
+            PositionEncodingKind::Utf8 => tower_lsp::lsp_types::PositionEncodingKind::UTF8,
+            PositionEncodingKind::Utf16 => tower_lsp::lsp_types::PositionEncodingKind::UTF16,
+            PositionEncodingKind::Utf32 => tower_lsp::lsp_types::PositionEncodingKind::UTF32,
+        }
+    }
 }
 
 pub(crate) struct Document {
@@ -165,11 +205,11 @@ impl Document {
     ) -> Result<()> {
         match change.range {
             Some(range) => {
-                assert!(
-                    range.start.line < range.end.line
-                        || (range.start.line == range.end.line
-                            && range.start.character <= range.end.character)
-                );
+                if range.start.line < range.end.line
+                    || (range.start.line == range.end.line
+                        && range.start.character <= range.end.character) {
+                    return Err(Error::InvalidRange(range));
+                }
 
                 let same_line = range.start.line == range.end.line;
                 let same_character = range.start.character == range.end.character;
@@ -179,15 +219,7 @@ impl Document {
 
                 // 1. Get the line at which the change starts.
                 let change_start_line_idx = range.start.line as usize;
-                let change_start_line = match self.text.get_line(change_start_line_idx) {
-                    Some(line) => line,
-                    None => {
-                        return Err(LspError::Rope(RopeyError::LineIndexOutOfBounds(
-                            change_start_line_idx,
-                            self.text.len_lines(),
-                        )));
-                    }
-                };
+                let change_start_line = self.text.get_line(change_start_line_idx).ok_or_else(|| Error::OutOfBoundLine(change_start_line_idx, self.text.len_lines()))?;
 
                 // 2. Get the line at which the change ends. (Small optimization
                 // where we first check whether start and end line are the
@@ -196,15 +228,7 @@ impl Document {
                 let change_end_line_idx = range.end.line as usize;
                 let change_end_line = match same_line {
                     true => change_start_line,
-                    false => match self.text.get_line(change_end_line_idx) {
-                        Some(line) => line,
-                        None => {
-                            return Err(LspError::Rope(RopeyError::LineIndexOutOfBounds(
-                                change_end_line_idx,
-                                self.text.len_lines(),
-                            )));
-                        }
-                    },
+                    false => self.text.get_line(change_end_line_idx).ok_or_else(|| Error::OutOfBoundLine(change_end_line_idx, self.text.len_lines()))?,
                 };
 
                 fn compute_char_idx(
@@ -212,17 +236,14 @@ impl Document {
                     position: &Position,
                     slice: &RopeSlice,
                 ) -> Result<usize> {
-                    match position_encoding {
-                        PositionEncodingKind::UTF8 => {
-                            slice.try_byte_to_char(position.character as usize)
+                    Ok(match position_encoding {
+                        PositionEncodingKind::Utf8 => {
+                            slice.try_byte_to_char(position.character as usize)?
                         }
-                        PositionEncodingKind::UTF16 => {
-                            slice.try_utf16_cu_to_char(position.character as usize)
+                        PositionEncodingKind::Utf16 => {
+                            slice.try_utf16_cu_to_char(position.character as usize)?
                         }
-                        PositionEncodingKind::UTF32 => Ok(position.character as usize),
-                    }
-                    .map_err(|err| {
-                        LspError::Rope(err)
+                        PositionEncodingKind::Utf32 => position.character as usize,
                     })
                 }
 
@@ -252,20 +273,20 @@ impl Document {
                 // 5. Compute the byte offset into the start/end line where the
                 // change starts/ends. Required for tree-sitter.
                 let change_start_line_byte_idx = match position_encoding {
-                    PositionEncodingKind::UTF8 => change_start_line_cu_idx,
-                    PositionEncodingKind::UTF16 => {
+                    PositionEncodingKind::Utf8 => change_start_line_cu_idx,
+                    PositionEncodingKind::Utf16 => {
                         change_start_line.char_to_utf16_cu(change_start_line_char_idx)
                     }
-                    PositionEncodingKind::UTF32 => change_start_line_char_idx,
+                    PositionEncodingKind::Utf32 => change_start_line_char_idx,
                 };
                 let change_end_line_byte_idx = match same_line && same_character {
                     true => change_start_line_byte_idx,
                     false => match position_encoding {
-                        PositionEncodingKind::UTF8 => change_end_line_cu_idx,
-                        PositionEncodingKind::UTF16 => {
+                        PositionEncodingKind::Utf8 => change_end_line_cu_idx,
+                        PositionEncodingKind::Utf16 => {
                             change_end_line.char_to_utf16_cu(change_end_line_char_idx)
                         }
-                        PositionEncodingKind::UTF32 => change_end_line_char_idx,
+                        PositionEncodingKind::Utf32 => change_end_line_char_idx,
                     },
                 };
 
@@ -347,14 +368,14 @@ mod test {
         let mut rope = Rope::from_str("🤗 Hello 🤗\nABC 🇫🇷\n world!");
         let mut doc = Document::open("unknown", &rope.to_string()).await.unwrap();
 
-        doc.apply_content_change(new_change!(0, 0, 0, 3, ""), PositionEncodingKind::UTF16)
+        doc.apply_content_change(new_change!(0, 0, 0, 3, ""), PositionEncodingKind::Utf16)
             .unwrap();
         rope = Rope::from_str("Hello 🤗\nABC 🇫🇷\n world!");
         assert_eq!(doc.text.to_string(), rope.to_string());
 
         doc.apply_content_change(
             new_change!(1, 4 + "🇫🇷".len(), 1, 4 + "🇫🇷".len(), " DEF"),
-            PositionEncodingKind::UTF8,
+            PositionEncodingKind::Utf8,
         )
         .unwrap();
         rope = Rope::from_str("Hello 🤗\nABC 🇫🇷 DEF\n world!");
@@ -362,25 +383,25 @@ mod test {
 
         doc.apply_content_change(
             new_change!(1, 0, 1, 4 + "🇫🇷".chars().count() + 4, ""),
-            PositionEncodingKind::UTF32,
+            PositionEncodingKind::Utf32,
         )
         .unwrap();
         rope = Rope::from_str("Hello 🤗\n\n world!");
         assert_eq!(doc.text.to_string(), rope.to_string());
 
-        doc.apply_content_change(new_change!(1, 0, 1, 1, ""), PositionEncodingKind::UTF16)
+        doc.apply_content_change(new_change!(1, 0, 1, 1, ""), PositionEncodingKind::Utf16)
             .unwrap();
         rope = Rope::from_str("Hello 🤗\n world!");
         assert_eq!(doc.text.to_string(), rope.to_string());
 
-        doc.apply_content_change(new_change!(0, 5, 1, 1, "，"), PositionEncodingKind::UTF16)
+        doc.apply_content_change(new_change!(0, 5, 1, 1, "，"), PositionEncodingKind::Utf16)
             .unwrap();
         rope = Rope::from_str("Hello，world!");
         assert_eq!(doc.text.to_string(), rope.to_string());
 
         doc.apply_content_change(
             new_change!(0, 0, 0, rope.len_utf16_cu(), ""),
-            PositionEncodingKind::UTF16,
+            PositionEncodingKind::Utf16,
         )
         .unwrap();
         assert_eq!(doc.text.to_string(), "");
@@ -404,7 +425,7 @@ mod test {
                 range_length: None,
                 text: "let a = '🥸 你好';\rfunction helloWorld() { return '🤲🏿'; }\nlet b = 'Hi, 😊';".to_owned(),
             },
-            PositionEncodingKind::UTF16,
+            PositionEncodingKind::Utf16,
         ).is_ok());
         assert_eq!(doc.text.to_string(), rope.to_string());
 
@@ -422,7 +443,7 @@ mod test {
                     range_length: None,
                     text: "let a = '🥸 你好，😊';".to_owned(),
                 },
-                PositionEncodingKind::UTF16,
+                PositionEncodingKind::Utf16,
             )
             .is_ok());
         rope = Rope::from_str("let a = '🥸 你好，😊';");
@@ -442,15 +463,15 @@ mod test {
         let mut doc = Document::open(&LanguageId::Unknown.to_string(), &rope.to_string()).await.unwrap();
 
         assert!(doc
-            .apply_content_change(new_change!(0, 0, 0, 1, ""), PositionEncodingKind::UTF16)
+            .apply_content_change(new_change!(0, 0, 0, 1, ""), PositionEncodingKind::Utf16)
             .is_err());
 
         assert!(doc
-            .apply_content_change(new_change!(1, 0, 1, 0, ""), PositionEncodingKind::UTF16)
+            .apply_content_change(new_change!(1, 0, 1, 0, ""), PositionEncodingKind::Utf16)
             .is_err());
 
         assert!(doc
-            .apply_content_change(new_change!(0, 0, 0, 0, "🤗"), PositionEncodingKind::UTF16)
+            .apply_content_change(new_change!(0, 0, 0, 0, "🤗"), PositionEncodingKind::Utf16)
             .is_ok());
         let rope = Rope::from_str("🤗");
         assert_eq!(doc.text.to_string(), rope.to_string());
@@ -458,7 +479,7 @@ mod test {
         assert!(doc
             .apply_content_change(
                 new_change!(0, rope.len_utf16_cu(), 0, rope.len_utf16_cu(), "\r\n"),
-                PositionEncodingKind::UTF16
+                PositionEncodingKind::Utf16
             )
             .is_ok());
         let rope = Rope::from_str("🤗\r\n");
@@ -467,7 +488,7 @@ mod test {
         assert!(doc
             .apply_content_change(
                 new_change!(0, '🤗'.len_utf16(), 0, '🤗'.len_utf16(), "\n"),
-                PositionEncodingKind::UTF16
+                PositionEncodingKind::Utf16
             )
             .is_ok());
         let rope = Rope::from_str("🤗\n\r\n");
@@ -476,7 +497,7 @@ mod test {
         assert!(doc
             .apply_content_change(
                 new_change!(0, '🤗'.len_utf16(), 2, 0, ""),
-                PositionEncodingKind::UTF16
+                PositionEncodingKind::Utf16
             )
             .is_ok());
         let rope = Rope::from_str("🤗");
@@ -491,7 +512,7 @@ mod test {
         let mut document = Document::open(&LanguageId::JavaScript.to_string(), a).await.unwrap();
 
         document
-            .apply_content_change(new_change!(0, 9, 0, 11, "𐐀"), PositionEncodingKind::UTF16)
+            .apply_content_change(new_change!(0, 9, 0, 11, "𐐀"), PositionEncodingKind::Utf16)
             .unwrap();
 
         let b = "let a = '𐐀';\rlet b = 'Hi, 😊';";
@@ -519,7 +540,7 @@ mod test {
         let mut document = Document::open(&LanguageId::JavaScript.to_string(), a).await.unwrap();
 
         document
-            .apply_content_change(new_change!(0, 14, 2, 13, "，"), PositionEncodingKind::UTF16)
+            .apply_content_change(new_change!(0, 14, 2, 13, "，"), PositionEncodingKind::Utf16)
             .unwrap();
 
         let b = "let a = '🥸 你好，😊';";
