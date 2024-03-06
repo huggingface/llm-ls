@@ -1,4 +1,4 @@
-use std::fmt::Display;
+use std::{fmt::Display, path::PathBuf};
 
 use tower_lsp::jsonrpc::Error as LspError;
 use tracing::error;
@@ -15,6 +15,14 @@ pub(crate) fn internal_error<E: Display>(err: E) -> LspError {
 
 #[derive(thiserror::Error, Debug)]
 pub enum Error {
+    #[error("candle error: {0}")]
+    Candle(#[from] candle::Error),
+    #[error("config error: {0}")]
+    Config(#[from] config::ConfigError),
+    #[error("gitignore error: {0}")]
+    Gitignore(#[from] gitignore::Error),
+    #[error("huggingface api error: {0}")]
+    HfApi(#[from] hf_hub::api::tokio::ApiError),
     #[error("http error: {0}")]
     Http(#[from] reqwest::Error),
     #[error("io error: {0}")]
@@ -29,6 +37,14 @@ pub enum Error {
     InvalidRepositoryId,
     #[error("invalid tokenizer path")]
     InvalidTokenizerPath,
+    #[error("malformatted embedding metadata, missing {0} field")]
+    MalformattedEmbeddingMetadata(String),
+    #[error("embedding has no metadata")]
+    MissingMetadata,
+    #[error("no final path: {0}")]
+    NoFinalPath(PathBuf),
+    #[error("error converting to string")]
+    NonUnicode,
     #[error("ollama error: {0}")]
     Ollama(crate::backend::APIError),
     #[error("openai error: {0}")]
@@ -43,16 +59,28 @@ pub enum Error {
     Rope(#[from] ropey::Error),
     #[error("serde json error: {0}")]
     SerdeJson(#[from] serde_json::Error),
+    #[error("snippet is too larger to be converted to an embedding: {0} > {1}")]
+    SnippetTooLarge(usize, usize),
+    #[error("strip prefix error: {0}")]
+    StripPrefix(#[from] std::path::StripPrefixError),
     #[error("tgi error: {0}")]
     Tgi(crate::backend::APIError),
+    #[error("tinyvec-embed error: {0}")]
+    TinyVecEmbed(#[from] tinyvec_embed::error::Error),
     #[error("tree-sitter language error: {0}")]
     TreeSitterLanguage(#[from] tree_sitter::LanguageError),
     #[error("tokenizer error: {0}")]
     Tokenizer(#[from] tokenizers::Error),
     #[error("tokio join error: {0}")]
     TokioJoin(#[from] tokio::task::JoinError),
+    #[error("embeddings database is uninitialised")]
+    UninitialisedDatabase,
     #[error("unknown backend: {0}")]
     UnknownBackend(String),
+    #[error("yaml serialization error: {0}")]
+    Yaml(#[from] serde_yaml::Error),
+    #[error("No embedding built")]
+    MissingEmbedding,
 }
 
 pub(crate) type Result<T> = std::result::Result<T, Error>;

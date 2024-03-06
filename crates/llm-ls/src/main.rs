@@ -1,20 +1,28 @@
 use clap::Parser;
+use config::{load_config, LlmLsConfig};
 use custom_types::llm_ls::{
     AcceptCompletionParams, Backend, Completion, FimParams, GetCompletionsParams,
     GetCompletionsResult, Ide, RejectCompletionParams, TokenizerConfig,
 };
+use language_id::LanguageId;
+use retrieval::{Snippet, SnippetRetriever};
 use ropey::Rope;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt::Display;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use tinyvec_embed::db::{Compare, FilterBuilder};
 use tokenizers::Tokenizer;
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpListener;
-use tokio::sync::RwLock;
+use tokio::sync::{oneshot, RwLock};
+use tokio::task::JoinHandle;
+use tokio::time::Instant;
 use tower_lsp::jsonrpc::Result as LspResult;
+use tower_lsp::lsp_types::notification::Progress;
+use tower_lsp::lsp_types::request::WorkDoneProgressCreate;
 use tower_lsp::lsp_types::*;
 use tower_lsp::{Client, LanguageServer, LspService, Server};
 use tracing::{debug, error, info, info_span, warn, Instrument};
@@ -25,11 +33,14 @@ use uuid::Uuid;
 use crate::backend::{build_body, build_headers, parse_generations};
 use crate::document::Document;
 use crate::error::{internal_error, Error, Result};
+use crate::retrieval::BuildFrom;
 
 mod backend;
+mod config;
 mod document;
 mod error;
 mod language_id;
+mod retrieval;
 
 const MAX_WARNING_REPEAT: Duration = Duration::from_secs(3_600);
 pub const NAME: &str = "llm-ls";
@@ -129,20 +140,56 @@ pub struct Generation {
 struct LlmService {
     cache_dir: PathBuf,
     client: Client,
+    config: Arc<LlmLsConfig>,
     document_map: Arc<RwLock<HashMap<String, Document>>>,
     http_client: reqwest::Client,
     unsafe_http_client: reqwest::Client,
     workspace_folders: Arc<RwLock<Option<Vec<WorkspaceFolder>>>>,
     tokenizer_map: Arc<RwLock<HashMap<String, Arc<Tokenizer>>>>,
     unauthenticated_warn_at: Arc<RwLock<Instant>>,
+    snippet_retriever: Arc<RwLock<SnippetRetriever>>,
+    supports_progress_bar: Arc<RwLock<bool>>,
+    cancel_snippet_build_tx: Arc<RwLock<Option<oneshot::Sender<()>>>>,
+    indexation_handle: Arc<RwLock<Option<JoinHandle<()>>>>,
 }
 
-fn build_prompt(
+fn build_context_header(language_id: LanguageId, snippets: Vec<Snippet>) -> String {
+    if snippets.is_empty() {
+        return String::new();
+    }
+    let comment = language_id.get_language_comment();
+    let mut header = vec![comment.comment_string(
+        "Below are some relevant code snippets contained in this project's files:".to_owned(),
+    )];
+    for snippet in snippets {
+        header.push(comment.comment_string("--------------".to_owned()));
+        header.push(comment.comment_string(format!("snippet from: {}", snippet.file_url)));
+        header.push(comment.comment_string("--------------".to_owned()));
+        header.push(
+            snippet
+                .code
+                .lines()
+                .map(|l| comment.comment_string(l.to_owned()))
+                .collect::<Vec<String>>()
+                .join("\n"),
+        );
+        header.push(comment.comment_string("--------------".to_owned()));
+    }
+    let mut header = header.join("\n");
+    header.push('\n');
+    header
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn build_prompt(
     pos: Position,
     text: &Rope,
     fim: &FimParams,
     tokenizer: Option<Arc<Tokenizer>>,
     context_window: usize,
+    file_url: &str,
+    language_id: LanguageId,
+    snippet_retriever: Arc<RwLock<SnippetRetriever>>,
 ) -> Result<String> {
     let t = Instant::now();
     if fim.enabled {
@@ -191,13 +238,33 @@ fn build_prompt(
             before_line = before_iter.next();
             after_line = after_iter.next();
         }
+        let before = before.into_iter().rev().collect::<Vec<_>>().join("");
+        let query = snippet_retriever
+            .read()
+            .await
+            .build_query(
+                format!("{before}{after}"),
+                BuildFrom::Cursor {
+                    cursor_position: before.len(),
+                },
+            )
+            .await?;
+        let snippets = snippet_retriever
+            .read()
+            .await
+            .search(
+                &query,
+                Some(FilterBuilder::new().comparison(
+                    "file_url".to_owned(),
+                    Compare::Neq,
+                    file_url.into(),
+                )),
+            )
+            .await?;
+        let context_header = build_context_header(language_id, snippets);
         let prompt = format!(
-            "{}{}{}{}{}",
-            fim.prefix,
-            before.into_iter().rev().collect::<Vec<_>>().join(""),
-            fim.suffix,
-            after,
-            fim.middle
+            "{}{context_header}{before}{}{after}{}",
+            fim.prefix, fim.suffix, fim.middle
         );
         let time = t.elapsed().as_millis();
         info!(prompt, build_prompt_ms = time, "built prompt in {time} ms");
@@ -225,6 +292,25 @@ fn build_prompt(
             before.push(line);
         }
         let prompt = before.into_iter().rev().collect::<Vec<_>>().join("");
+        let query = snippet_retriever
+            .read()
+            .await
+            .build_query(prompt.clone(), BuildFrom::End)
+            .await?;
+        let snippets = snippet_retriever
+            .read()
+            .await
+            .search(
+                &query,
+                Some(FilterBuilder::new().comparison(
+                    "file_url".to_owned(),
+                    Compare::Neq,
+                    file_url.into(),
+                )),
+            )
+            .await?;
+        let context_header = build_context_header(language_id, snippets);
+        let prompt = format!("{context_header}{prompt}");
         let time = t.elapsed().as_millis();
         info!(prompt, build_prompt_ms = time, "built prompt in {time} ms");
         Ok(prompt)
@@ -433,8 +519,9 @@ impl LlmService {
         async move {
             let document_map = self.document_map.read().await;
 
+            let file_url = params.text_document_position.text_document.uri.as_str();
             let document =
-                match document_map.get(params.text_document_position.text_document.uri.as_str()) {
+                match document_map.get(file_url) {
                     Some(doc) => doc,
                     None => {
                         debug!("failed to find document");
@@ -488,7 +575,10 @@ impl LlmService {
                 &params.fim,
                 tokenizer,
                 params.context_window,
-            )?;
+                &file_url.replace("file://", ""),
+                document.language_id,
+                self.snippet_retriever.clone(),
+            ).await?;
 
             let http_client = if params.tls_skip_verify_insecure {
                 info!("tls verification is disabled");
@@ -526,12 +616,35 @@ impl LlmService {
         );
         Ok(())
     }
+
+    fn ignore_file(&self, uri: Url) -> bool {
+        let uri_str = uri.to_string();
+        let path = uri.path();
+        uri.scheme() == "output"
+            || uri.scheme() == "term"
+            || uri.scheme() == "file" && (uri_str == "file:///" || !Path::new(&path).exists())
+    }
 }
 
 #[tower_lsp::async_trait]
 impl LanguageServer for LlmService {
     async fn initialize(&self, params: InitializeParams) -> LspResult<InitializeResult> {
-        *self.workspace_folders.write().await = params.workspace_folders;
+        *self.workspace_folders.write().await = params.workspace_folders.clone();
+        *self.supports_progress_bar.write().await = params
+            .capabilities
+            .window
+            .map(|window| window.work_done_progress.unwrap_or(false))
+            .unwrap_or(false);
+        let position_encoding = params.capabilities.general.and_then(|general_cap| {
+            general_cap.position_encodings.and_then(|encodings| {
+                if encodings.contains(&PositionEncodingKind::UTF8) {
+                    Some(PositionEncodingKind::UTF8)
+                } else {
+                    // self.client.show_message(MessageType::WARNING, "llm-ls only supports UTF-8 position encoding, defaulting to UTF-16 which might cause offsetting errors").await;
+                    None
+                }
+            })
+        });
         Ok(InitializeResult {
             server_info: Some(ServerInfo {
                 name: "llm-ls".to_owned(),
@@ -541,12 +654,80 @@ impl LanguageServer for LlmService {
                 text_document_sync: Some(TextDocumentSyncCapability::Kind(
                     TextDocumentSyncKind::INCREMENTAL,
                 )),
+                position_encoding,
                 ..Default::default()
             },
         })
     }
 
     async fn initialized(&self, _: InitializedParams) {
+        let client = self.client.clone();
+        let config = self.config.clone();
+        let snippet_retriever = self.snippet_retriever.clone();
+        let supports_progress_bar = self.supports_progress_bar.clone();
+        let workspace_folders = self.workspace_folders.clone();
+        let token = NumberOrString::Number(42);
+
+        let token_copy = NumberOrString::Number(42);
+        let (tx, rx) = oneshot::channel();
+        *self.cancel_snippet_build_tx.write().await = Some(tx);
+        let handle = tokio::spawn(async move {
+            let guard = workspace_folders.read().await;
+            if let Some(workspace_folders) = guard.as_ref() {
+                if *supports_progress_bar.read().await {
+                    match client
+                        .send_request::<WorkDoneProgressCreate>(WorkDoneProgressCreateParams {
+                            token: token.clone(),
+                        })
+                        .await
+                    {
+                        Ok(_) => (),
+                        Err(err) => {
+                            error!("err: {err}");
+                            return;
+                        }
+                    };
+                    client
+                        .send_notification::<Progress>(ProgressParams {
+                            token: token.clone(),
+                            value: ProgressParamsValue::WorkDone(WorkDoneProgress::Begin(
+                                WorkDoneProgressBegin {
+                                    title: "creating workspace embeddings".to_owned(),
+                                    ..Default::default()
+                                },
+                            )),
+                        })
+                        .await;
+                }
+                let mut guard = snippet_retriever.write().await;
+                tokio::select! {
+                    res = guard.build_workspace_snippets(
+                        client.clone(),
+                        config,
+                        token,
+                        workspace_folders[0].uri.path(),
+                    ) => {
+                        if let Err(err) = res {
+                            error!("failed building workspace snippets: {err}");
+                        }
+                    },
+                    _ = rx => debug!("received cancellation, stopping indexation"),
+                }
+                if *supports_progress_bar.read().await {
+                    client
+                        .send_notification::<Progress>(ProgressParams {
+                            token: token_copy,
+                            value: ProgressParamsValue::WorkDone(WorkDoneProgress::End(
+                                WorkDoneProgressEnd {
+                                    ..Default::default()
+                                },
+                            )),
+                        })
+                        .await;
+                }
+            }
+        });
+        *self.indexation_handle.write().await = Some(handle);
         self.client
             .log_message(MessageType::INFO, "llm-ls initialized")
             .await;
@@ -555,9 +736,10 @@ impl LanguageServer for LlmService {
 
     async fn did_open(&self, params: DidOpenTextDocumentParams) {
         let uri = params.text_document.uri.to_string();
-        if uri == "file:///" {
+        if self.ignore_file(params.text_document.uri) {
             return;
         }
+
         match Document::open(
             &params.text_document.language_id,
             &params.text_document.text,
@@ -580,15 +762,8 @@ impl LanguageServer for LlmService {
 
     async fn did_change(&self, params: DidChangeTextDocumentParams) {
         let uri = params.text_document.uri.to_string();
-        if uri == "file:///" {
-            return;
-        }
-        if params.content_changes.is_empty() {
-            return;
-        }
-
-        // ignore the output scheme
-        if params.text_document.uri.scheme() == "output" {
+        let path = params.text_document.uri.path();
+        if self.ignore_file(params.text_document.uri.clone()) {
             return;
         }
 
@@ -601,7 +776,34 @@ impl LanguageServer for LlmService {
             for change in &params.content_changes {
                 if let Some(range) = change.range {
                     match doc.change(range, &change.text).await {
-                        Ok(()) => info!("{uri} changed"),
+                        Ok((start, old_end, new_end)) => {
+                            let start = Position::new(start as u32, 0);
+                            if let Err(err) = self
+                                .snippet_retriever
+                                .write()
+                                .await
+                                .remove(
+                                    path.to_owned(),
+                                    Range::new(start, Position::new(old_end as u32, 0)),
+                                )
+                                .await
+                            {
+                                error!("error while removing embeddings: {err}");
+                            }
+                            if let Err(err) = self
+                                .snippet_retriever
+                                .write()
+                                .await
+                                .update_document(
+                                    path.to_owned(),
+                                    Range::new(start, Position::new(new_end as u32, 0)),
+                                )
+                                .await
+                            {
+                                error!("error while updating embeddings: {err}");
+                            }
+                            info!("{uri} changed");
+                        }
                         Err(err) => error!("error when changing {uri}: {err}"),
                     }
                 } else {
@@ -633,6 +835,20 @@ impl LanguageServer for LlmService {
 
     async fn shutdown(&self) -> LspResult<()> {
         debug!("shutdown");
+        if let Some(tx) = self.cancel_snippet_build_tx.write().await.take() {
+            let _ = tx.send(());
+        }
+        self.snippet_retriever
+            .read()
+            .await
+            .stop()
+            .await
+            .map_err(internal_error)?;
+        if let Some(handle) = self.indexation_handle.write().await.take() {
+            if let Err(err) = handle.await {
+                error!("error indexing snippets: {err}");
+            }
+        }
         Ok(())
     }
 }
@@ -682,9 +898,24 @@ async fn main() {
         .build()
         .expect("failed to build reqwest unsafe client");
 
+    let config = Arc::new(
+        load_config(
+            cache_dir
+                .to_str()
+                .expect("cache dir path is not valid utf8"),
+        )
+        .await
+        .expect("failed to load config file"),
+    );
+    let snippet_retriever = Arc::new(RwLock::new(
+        SnippetRetriever::new(cache_dir.join("embeddings"), config.model.clone(), 20, 10)
+            .await
+            .expect("failed to initialise snippet retriever"),
+    ));
     let (service, socket) = LspService::build(|client| LlmService {
         cache_dir,
         client,
+        config,
         document_map: Arc::new(RwLock::new(HashMap::new())),
         http_client,
         unsafe_http_client,
@@ -695,6 +926,10 @@ async fn main() {
                 .checked_sub(MAX_WARNING_REPEAT)
                 .expect("instant to be in bounds"),
         )),
+        snippet_retriever,
+        supports_progress_bar: Arc::new(RwLock::new(false)),
+        cancel_snippet_build_tx: Arc::new(RwLock::new(None)),
+        indexation_handle: Arc::new(RwLock::new(None)),
     })
     .custom_method("llm-ls/getCompletions", LlmService::get_completions)
     .custom_method("llm-ls/acceptCompletion", LlmService::accept_completion)

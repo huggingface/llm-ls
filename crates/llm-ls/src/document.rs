@@ -123,7 +123,7 @@ fn get_parser(language_id: LanguageId) -> Result<Parser> {
             parser.set_language(tree_sitter_typescript::language_tsx())?;
             Ok(parser)
         }
-        LanguageId::Unknown => Ok(Parser::new()),
+        _ => Ok(Parser::new()),
     }
 }
 
@@ -148,7 +148,11 @@ impl Document {
         })
     }
 
-    pub(crate) async fn change(&mut self, range: Range, text: &str) -> Result<()> {
+    pub(crate) async fn change(
+        &mut self,
+        range: Range,
+        text: &str,
+    ) -> Result<(usize, usize, usize)> {
         let start_idx = get_position_idx(
             &self.text,
             range.start.line as usize,
@@ -215,6 +219,10 @@ impl Document {
             tree.edit(&edit);
         }
         self.tree = self.parser.parse(self.text.to_string(), self.tree.as_ref());
-        Ok(())
+        Ok((
+            start_position.row,
+            old_end_position.row,
+            new_end_position.row,
+        ))
     }
 }
