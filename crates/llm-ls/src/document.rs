@@ -146,7 +146,7 @@ impl TryFrom<tower_lsp::lsp_types::PositionEncodingKind> for PositionEncodingKin
         } else if value == tower_lsp::lsp_types::PositionEncodingKind::UTF32 {
             Ok(PositionEncodingKind::Utf32)
         } else {
-            Err(Error::UnknownEncodingKind(value.as_str().to_string()))
+            Err(Error::UnknownEncodingKind(value.as_str().to_owned()))
         }
     }
 }
@@ -168,7 +168,7 @@ impl TryFrom<Vec<tower_lsp::lsp_types::PositionEncodingKind>> for PositionEncodi
 }
 
 impl PositionEncodingKind {
-    pub fn to_lsp_types(&self) -> tower_lsp::lsp_types::PositionEncodingKind {
+    pub fn to_lsp_type(&self) -> tower_lsp::lsp_types::PositionEncodingKind {
         match self {
             PositionEncodingKind::Utf8 => tower_lsp::lsp_types::PositionEncodingKind::UTF8,
             PositionEncodingKind::Utf16 => tower_lsp::lsp_types::PositionEncodingKind::UTF16,
@@ -325,10 +325,14 @@ impl Document {
 
                     tree.edit(&edit);
 
-                    self.tree = Some(self
-                                .parser
-                                .parse(self.text.to_string(), Some(tree))
-                                .expect("parse should always return a tree when the language was set and no timeout was specified"));
+                    match self.parser.parse(self.text.to_string(), Some(tree)) {
+                        Some(new_tree) => {
+                            self.tree = Some(new_tree);
+                        }
+                        None => {
+                            return Err(Error::TreeSitterParseError);
+                        }
+                    }
                 }
 
                 Ok(())

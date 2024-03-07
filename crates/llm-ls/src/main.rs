@@ -553,7 +553,7 @@ impl LanguageServer for LlmService {
                 text_document_sync: Some(TextDocumentSyncCapability::Kind(
                     TextDocumentSyncKind::INCREMENTAL,
                 )),
-                position_encoding: Some(position_encoding.to_lsp_types()),
+                position_encoding: Some(position_encoding.to_lsp_type()),
                 ..Default::default()
             },
         })
