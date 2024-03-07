@@ -509,6 +509,27 @@ fn build_url(backend: Backend, model: &str) -> String {
 }
 
 impl LlmService {
+    async fn file_uri_to_workspace(&self, file_uri: String) -> String {
+        debug!("From file to workspace {}", file_uri);
+        debug!("With workspaces {:?}", self.workspace_folders);
+        let folders = self.workspace_folders.read().await;
+        match folders.as_ref() {
+            Some(folders) => {
+                let parent_workspace = folders
+                    .clone()
+                    .into_iter()
+                    .filter(|folder| file_uri.contains(folder.uri.path()))
+                    .collect::<Vec<WorkspaceFolder>>();
+                if parent_workspace.is_empty() {
+                    folders[0].name.clone()
+                } else {
+                    parent_workspace[0].name.clone()
+                }
+            }
+            None => "".to_string(),
+        }
+    }
+
     async fn get_completions(
         &self,
         params: GetCompletionsParams,
@@ -520,6 +541,7 @@ impl LlmService {
             let document_map = self.document_map.read().await;
 
             let file_url = params.text_document_position.text_document.uri.as_str();
+            let target_workspace = self.file_uri_to_workspace(file_url.to_string()).await;
             let document =
                 match document_map.get(file_url) {
                     Some(doc) => doc,
@@ -897,6 +919,7 @@ async fn main() {
         .danger_accept_invalid_certs(true)
         .build()
         .expect("failed to build reqwest unsafe client");
+    debug!("Reading {:?}", cache_dir);
 
     let config = Arc::new(
         load_config(
@@ -950,5 +973,86 @@ async fn main() {
     } else {
         let (stdin, stdout) = (tokio::io::stdin(), tokio::io::stdout());
         Server::new(stdin, stdout, socket).serve(service).await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    async fn service_setup() -> LspService<LlmService> {
+        let cache_dir = PathBuf::from(r"idontexist");
+        let config = Arc::new(LlmLsConfig {
+            ..Default::default()
+        });
+        let snippet_retriever = Arc::new(RwLock::new(
+            SnippetRetriever::new(cache_dir.join("embeddings"), config.model.clone(), 20, 10)
+                .await
+                .unwrap(),
+        ));
+        let (service, _) = LspService::build(|client| LlmService {
+            cache_dir,
+            client,
+            config,
+            document_map: Arc::new(RwLock::new(HashMap::new())),
+            http_client: reqwest::Client::new(),
+            unsafe_http_client: reqwest::Client::new(),
+            workspace_folders: Arc::new(RwLock::new(None)),
+            tokenizer_map: Arc::new(RwLock::new(HashMap::new())),
+            unauthenticated_warn_at: Arc::new(RwLock::new(
+                Instant::now()
+                    .checked_sub(MAX_WARNING_REPEAT)
+                    .expect("instant to be in bounds"),
+            )),
+            snippet_retriever,
+            supports_progress_bar: Arc::new(RwLock::new(false)),
+            cancel_snippet_build_tx: Arc::new(RwLock::new(None)),
+            indexation_handle: Arc::new(RwLock::new(None)),
+        })
+        .finish();
+        service
+    }
+
+    #[tokio::test]
+    async fn test_file_uri_to_workspace() {
+        // let (service, socket) = LspService::new(|client| LlmService { client });
+        let service = service_setup().await;
+        {
+            let inn = service
+                .inner()
+                .file_uri_to_workspace("/home/test".to_string())
+                .await;
+            assert_eq!(inn, "");
+        }
+        {
+            *service.inner().workspace_folders.write().await = vec![
+                WorkspaceFolder {
+                    name: "other_repo".to_string(),
+                    uri: Url::from_directory_path("/home/other_test").unwrap(),
+                },
+                WorkspaceFolder {
+                    name: "test_repo".to_string(),
+                    uri: Url::from_directory_path("/home/test").unwrap(),
+                },
+            ]
+            .into();
+            let inn = service
+                .inner()
+                .file_uri_to_workspace("/home/test/src/lib/main.py".to_string())
+                .await;
+            assert_eq!(inn, "test_repo");
+        }
+        {
+            *service.inner().workspace_folders.write().await = vec![WorkspaceFolder {
+                name: "other_repo".to_string(),
+                uri: Url::from_directory_path("/home/other_test").unwrap(),
+            }]
+            .into();
+            let inn = service
+                .inner()
+                .file_uri_to_workspace("/home/test/src/lib/main.py".to_string())
+                .await;
+            assert_eq!(inn, "other_repo");
+        }
     }
 }
