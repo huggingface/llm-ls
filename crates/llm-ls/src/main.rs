@@ -39,7 +39,7 @@ fn get_position_idx(rope: &Rope, row: usize, col: usize) -> Result<usize> {
     Ok(rope.try_line_to_char(row)?
         + col.min(
             rope.get_line(row.min(rope.len_lines().saturating_sub(1)))
-                .ok_or(Error::OutOfBoundLine(row))?
+                .ok_or(Error::OutOfBoundLine(row, rope.len_lines()))?
                 .len_chars()
                 .saturating_sub(1),
         ))
@@ -135,6 +135,7 @@ struct LlmService {
     workspace_folders: Arc<RwLock<Option<Vec<WorkspaceFolder>>>>,
     tokenizer_map: Arc<RwLock<HashMap<String, Arc<Tokenizer>>>>,
     unauthenticated_warn_at: Arc<RwLock<Instant>>,
+    position_encoding: Arc<RwLock<document::PositionEncodingKind>>,
 }
 
 fn build_prompt(
@@ -532,6 +533,17 @@ impl LlmService {
 impl LanguageServer for LlmService {
     async fn initialize(&self, params: InitializeParams) -> LspResult<InitializeResult> {
         *self.workspace_folders.write().await = params.workspace_folders;
+        let position_encoding = params
+            .capabilities
+            .general
+            .and_then(|general_capabilities| {
+                general_capabilities
+                    .position_encodings
+                    .map(TryFrom::try_from)
+            }).unwrap_or(Ok(document::PositionEncodingKind::Utf16))?;
+
+        *self.position_encoding.write().await = position_encoding;
+
         Ok(InitializeResult {
             server_info: Some(ServerInfo {
                 name: "llm-ls".to_owned(),
@@ -541,6 +553,7 @@ impl LanguageServer for LlmService {
                 text_document_sync: Some(TextDocumentSyncCapability::Kind(
                     TextDocumentSyncKind::INCREMENTAL,
                 )),
+                position_encoding: Some(position_encoding.to_lsp_type()),
                 ..Default::default()
             },
         })
@@ -599,13 +612,9 @@ impl LanguageServer for LlmService {
         let doc = document_map.get_mut(&uri);
         if let Some(doc) = doc {
             for change in &params.content_changes {
-                if let Some(range) = change.range {
-                    match doc.change(range, &change.text).await {
-                        Ok(()) => info!("{uri} changed"),
-                        Err(err) => error!("error when changing {uri}: {err}"),
-                    }
-                } else {
-                    warn!("Could not update document, got change request with missing range");
+                match doc.apply_content_change(change, *self.position_encoding.read().await) {
+                    Ok(()) => info!("{uri} changed"),
+                    Err(err) => error!("error when changing {uri}: {err}"),
                 }
             }
         } else {
@@ -685,6 +694,7 @@ async fn main() {
     let (service, socket) = LspService::build(|client| LlmService {
         cache_dir,
         client,
+        position_encoding: Arc::new(RwLock::new(document::PositionEncodingKind::Utf16)),
         document_map: Arc::new(RwLock::new(HashMap::new())),
         http_client,
         unsafe_http_client,
