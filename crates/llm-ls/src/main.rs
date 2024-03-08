@@ -1,7 +1,7 @@
 use clap::Parser;
 use custom_types::llm_ls::{
     AcceptCompletionParams, Backend, Completion, FimParams, GetCompletionsParams,
-    GetCompletionsResult, Ide, TokenizerConfig,
+    GetCompletionsResult, Ide, RejectCompletionParams, TokenizerConfig,
 };
 use ropey::Rope;
 use serde::{Deserialize, Serialize};
@@ -39,7 +39,7 @@ fn get_position_idx(rope: &Rope, row: usize, col: usize) -> Result<usize> {
     Ok(rope.try_line_to_char(row)?
         + col.min(
             rope.get_line(row.min(rope.len_lines().saturating_sub(1)))
-                .ok_or(Error::OutOfBoundLine(row))?
+                .ok_or(Error::OutOfBoundLine(row, rope.len_lines()))?
                 .len_chars()
                 .saturating_sub(1),
         ))
@@ -121,75 +121,9 @@ fn should_complete(document: &Document, position: Position) -> Result<Completion
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RequestParams {
-    max_new_tokens: u32,
-    temperature: f32,
-    do_sample: bool,
-    top_p: f32,
-    stop_tokens: Option<Vec<String>>,
-}
-
-#[derive(Debug, Serialize)]
-struct APIParams {
-    max_new_tokens: u32,
-    temperature: f32,
-    do_sample: bool,
-    top_p: f32,
-    #[allow(dead_code)]
-    #[serde(skip_serializing)]
-    stop: Option<Vec<String>>,
-    return_full_text: bool,
-}
-
-impl From<RequestParams> for APIParams {
-    fn from(params: RequestParams) -> Self {
-        Self {
-            max_new_tokens: params.max_new_tokens,
-            temperature: params.temperature,
-            do_sample: params.do_sample,
-            top_p: params.top_p,
-            stop: params.stop_tokens,
-            return_full_text: false,
-        }
-    }
-}
-
-#[derive(Serialize)]
-struct APIRequest {
-    inputs: String,
-    parameters: APIParams,
-}
-
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Generation {
     generated_text: String,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct APIError {
-    error: String,
-}
-
-impl std::error::Error for APIError {
-    fn description(&self) -> &str {
-        &self.error
-    }
-}
-
-impl Display for APIError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.error)
-    }
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(untagged)]
-pub enum APIResponse {
-    Generation(Generation),
-    Generations(Vec<Generation>),
-    Error(APIError),
 }
 
 struct LlmService {
@@ -201,6 +135,7 @@ struct LlmService {
     workspace_folders: Arc<RwLock<Option<Vec<WorkspaceFolder>>>>,
     tokenizer_map: Arc<RwLock<HashMap<String, Arc<Tokenizer>>>>,
     unauthenticated_warn_at: Arc<RwLock<Instant>>,
+    position_encoding: Arc<RwLock<document::PositionEncodingKind>>,
 }
 
 fn build_prompt(
@@ -495,12 +430,22 @@ impl LlmService {
     ) -> LspResult<GetCompletionsResult> {
         let request_id = Uuid::new_v4();
         let span = info_span!("completion_request", %request_id);
+
         async move {
             let document_map = self.document_map.read().await;
 
-            let document = document_map
-                .get(params.text_document_position.text_document.uri.as_str())
-                .ok_or_else(|| internal_error("failed to find document"))?;
+            let document =
+                match document_map.get(params.text_document_position.text_document.uri.as_str()) {
+                    Some(doc) => doc,
+                    None => {
+                        debug!("failed to find document");
+                        return Ok(GetCompletionsResult {
+                            request_id,
+                            completions: vec![],
+                        });
+                    }
+                };
+
             info!(
                 document_url = %params.text_document_position.text_document.uri,
                 cursor_line = ?params.text_document_position.position.line,
@@ -574,7 +519,7 @@ impl LlmService {
         Ok(())
     }
 
-    async fn reject_completion(&self, rejected: AcceptCompletionParams) -> LspResult<()> {
+    async fn reject_completion(&self, rejected: RejectCompletionParams) -> LspResult<()> {
         info!(
             request_id = %rejected.request_id,
             shown_completions = serde_json::to_string(&rejected.shown_completions).map_err(internal_error)?,
@@ -588,6 +533,17 @@ impl LlmService {
 impl LanguageServer for LlmService {
     async fn initialize(&self, params: InitializeParams) -> LspResult<InitializeResult> {
         *self.workspace_folders.write().await = params.workspace_folders;
+        let position_encoding = params
+            .capabilities
+            .general
+            .and_then(|general_capabilities| {
+                general_capabilities
+                    .position_encodings
+                    .map(TryFrom::try_from)
+            }).unwrap_or(Ok(document::PositionEncodingKind::Utf16))?;
+
+        *self.position_encoding.write().await = position_encoding;
+
         Ok(InitializeResult {
             server_info: Some(ServerInfo {
                 name: "llm-ls".to_owned(),
@@ -597,6 +553,7 @@ impl LanguageServer for LlmService {
                 text_document_sync: Some(TextDocumentSyncCapability::Kind(
                     TextDocumentSyncKind::INCREMENTAL,
                 )),
+                position_encoding: Some(position_encoding.to_lsp_type()),
                 ..Default::default()
             },
         })
@@ -611,6 +568,9 @@ impl LanguageServer for LlmService {
 
     async fn did_open(&self, params: DidOpenTextDocumentParams) {
         let uri = params.text_document.uri.to_string();
+        if uri == "file:///" {
+            return;
+        }
         match Document::open(
             &params.text_document.language_id,
             &params.text_document.text,
@@ -633,6 +593,9 @@ impl LanguageServer for LlmService {
 
     async fn did_change(&self, params: DidChangeTextDocumentParams) {
         let uri = params.text_document.uri.to_string();
+        if uri == "file:///" {
+            return;
+        }
         if params.content_changes.is_empty() {
             return;
         }
@@ -649,17 +612,13 @@ impl LanguageServer for LlmService {
         let doc = document_map.get_mut(&uri);
         if let Some(doc) = doc {
             for change in &params.content_changes {
-                if let Some(range) = change.range {
-                    match doc.change(range, &change.text).await {
-                        Ok(()) => info!("{uri} changed"),
-                        Err(err) => error!("error when changing {uri}: {err}"),
-                    }
-                } else {
-                    warn!("Could not update document, got change request with missing range");
+                match doc.apply_content_change(change, *self.position_encoding.read().await) {
+                    Ok(()) => info!("{uri} changed"),
+                    Err(err) => error!("error when changing {uri}: {err}"),
                 }
             }
         } else {
-            warn!("textDocument/didChange {uri}: document not found");
+            debug!("textDocument/didChange {uri}: document not found");
         }
     }
 
@@ -735,6 +694,7 @@ async fn main() {
     let (service, socket) = LspService::build(|client| LlmService {
         cache_dir,
         client,
+        position_encoding: Arc::new(RwLock::new(document::PositionEncodingKind::Utf16)),
         document_map: Arc::new(RwLock::new(HashMap::new())),
         http_client,
         unsafe_http_client,
