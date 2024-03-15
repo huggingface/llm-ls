@@ -267,6 +267,18 @@ impl TryInto<usize> for &Value {
     }
 }
 
+impl TryInto<usize> for &Value {
+    type Error = Error;
+
+    fn try_into(self) -> Result<usize> {
+        if let Value::Number(n) = self {
+            Ok(n.clone() as usize)
+        } else {
+            Err(Error::ValueNotNumber(self.to_owned()))
+        }
+    }
+}
+
 impl From<usize> for Value {
     fn from(value: usize) -> Self {
         Self::Number(value as f32)

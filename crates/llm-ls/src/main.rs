@@ -190,6 +190,7 @@ async fn build_prompt(
     file_url: &str,
     language_id: LanguageId,
     snippet_retriever: Arc<RwLock<SnippetRetriever>>,
+    target_workspace: &str,
 ) -> Result<String> {
     let t = Instant::now();
     if fim.enabled {
@@ -259,6 +260,7 @@ async fn build_prompt(
                     Compare::Neq,
                     file_url.into(),
                 )),
+                target_workspace
             )
             .await?;
         let context_header = build_context_header(language_id, snippets);
@@ -307,6 +309,7 @@ async fn build_prompt(
                     Compare::Neq,
                     file_url.into(),
                 )),
+                target_workspace
             )
             .await?;
         let context_header = build_context_header(language_id, snippets);
@@ -508,6 +511,25 @@ fn build_url(backend: Backend, model: &str) -> String {
     }
 }
 
+fn file_uri_to_workspace(workspace_folders: Option<&Vec<WorkspaceFolder>>, file_uri: &str) -> String {
+    // let folders = self.workspace_folders.read().await;
+    match workspace_folders {
+        Some(folders) => {
+            let parent_workspace = folders
+                .clone()
+                .into_iter()
+                .filter(|folder| file_uri.contains(folder.uri.path()))
+                .collect::<Vec<WorkspaceFolder>>();
+            if parent_workspace.is_empty() {
+                folders[0].name.clone()
+            } else {
+                parent_workspace[0].name.clone()
+            }
+        }
+        None => "".to_string(),
+    }
+}
+
 impl LlmService {
     async fn get_completions(
         &self,
@@ -520,6 +542,9 @@ impl LlmService {
             let document_map = self.document_map.read().await;
 
             let file_url = params.text_document_position.text_document.uri.as_str();
+            let target_workspace = file_uri_to_workspace(
+                self.workspace_folders.read().await.as_ref(),
+                file_url);
             let document =
                 match document_map.get(file_url) {
                     Some(doc) => doc,
@@ -578,6 +603,7 @@ impl LlmService {
                 &file_url.replace("file://", ""),
                 document.language_id,
                 self.snippet_retriever.clone(),
+                &target_workspace,
             ).await?;
 
             let http_client = if params.tls_skip_verify_insecure {
@@ -700,12 +726,15 @@ impl LanguageServer for LlmService {
                         .await;
                 }
                 let mut guard = snippet_retriever.write().await;
+                let workspace_path = &workspace_folders[0].uri.path().to_string();
+                let workspace_root = file_uri_to_workspace(Some(workspace_folders), &workspace_path);
                 tokio::select! {
                     res = guard.build_workspace_snippets(
                         client.clone(),
                         config,
                         token,
-                        workspace_folders[0].uri.path(),
+                        &workspace_root,
+                        &workspace_path,
                     ) => {
                         if let Err(err) = res {
                             error!("failed building workspace snippets: {err}");
@@ -778,6 +807,9 @@ impl LanguageServer for LlmService {
                     match doc.change(range, &change.text).await {
                         Ok((start, old_end, new_end)) => {
                             let start = Position::new(start as u32, 0);
+                            let workspace_folders = self.workspace_folders.read().await;
+                            let target_workspace = file_uri_to_workspace(workspace_folders.as_ref(), path);
+
                             if let Err(err) = self
                                 .snippet_retriever
                                 .write()
@@ -785,6 +817,7 @@ impl LanguageServer for LlmService {
                                 .remove(
                                     path.to_owned(),
                                     Range::new(start, Position::new(old_end as u32, 0)),
+                                    &target_workspace,
                                 )
                                 .await
                             {
@@ -797,6 +830,7 @@ impl LanguageServer for LlmService {
                                 .update_document(
                                     path.to_owned(),
                                     Range::new(start, Position::new(new_end as u32, 0)),
+                                    &target_workspace,
                                 )
                                 .await
                             {
@@ -897,6 +931,7 @@ async fn main() {
         .danger_accept_invalid_certs(true)
         .build()
         .expect("failed to build reqwest unsafe client");
+    debug!("Reading {:?}", cache_dir);
 
     let config = Arc::new(
         load_config(
@@ -950,5 +985,83 @@ async fn main() {
     } else {
         let (stdin, stdout) = (tokio::io::stdin(), tokio::io::stdout());
         Server::new(stdin, stdout, socket).serve(service).await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    async fn service_setup() -> LspService<LlmService> {
+        let cache_dir = PathBuf::from(r"idontexist");
+        let config = Arc::new(LlmLsConfig {
+            ..Default::default()
+        });
+        let snippet_retriever = Arc::new(RwLock::new(
+            SnippetRetriever::new(cache_dir.join("embeddings"), config.model.clone(), 20, 10)
+                .await
+                .unwrap(),
+        ));
+        let (service, _) = LspService::build(|client| LlmService {
+            cache_dir,
+            client,
+            config,
+            document_map: Arc::new(RwLock::new(HashMap::new())),
+            http_client: reqwest::Client::new(),
+            unsafe_http_client: reqwest::Client::new(),
+            workspace_folders: Arc::new(RwLock::new(None)),
+            tokenizer_map: Arc::new(RwLock::new(HashMap::new())),
+            unauthenticated_warn_at: Arc::new(RwLock::new(
+                Instant::now()
+                    .checked_sub(MAX_WARNING_REPEAT)
+                    .expect("instant to be in bounds"),
+            )),
+            snippet_retriever,
+            supports_progress_bar: Arc::new(RwLock::new(false)),
+            cancel_snippet_build_tx: Arc::new(RwLock::new(None)),
+            indexation_handle: Arc::new(RwLock::new(None)),
+        })
+        .finish();
+        service
+    }
+
+    #[tokio::test]
+    async fn test_file_uri_to_workspace() {
+        // let (service, socket) = LspService::new(|client| LlmService { client });
+        let service = service_setup().await;
+        {
+            let folders = service.inner().workspace_folders.read().await;
+            let inn = file_uri_to_workspace(folders.as_ref(),
+                "/home/test");
+                
+            assert_eq!(inn, "");
+        }
+        {
+            *service.inner().workspace_folders.write().await = vec![
+                WorkspaceFolder {
+                    name: "other_repo".to_string(),
+                    uri: Url::from_directory_path("/home/other_test").unwrap(),
+                },
+                WorkspaceFolder {
+                    name: "test_repo".to_string(),
+                    uri: Url::from_directory_path("/home/test").unwrap(),
+                },
+            ]
+            .into();
+            let folders = service.inner().workspace_folders.read().await;
+            let inn = file_uri_to_workspace(folders.as_ref(),
+            "/home/test/src/lib/main.py");
+            assert_eq!(inn, "test_repo");
+        }
+        {
+            *service.inner().workspace_folders.write().await = vec![WorkspaceFolder {
+                name: "other_repo".to_string(),
+                uri: Url::from_directory_path("/home/other_test").unwrap(),
+            }]
+            .into();
+            let folders = service.inner().workspace_folders.read().await;
+            let inn = file_uri_to_workspace(folders.as_ref(), "/home/test/src/lib/main.py");
+            assert_eq!(inn, "other_repo");
+        }
     }
 }

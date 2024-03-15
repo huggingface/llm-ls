@@ -241,7 +241,6 @@ impl TryFrom<&SimilarityResult> for Snippet {
 
 pub(crate) struct SnippetRetriever {
     cache_path: PathBuf,
-    collection_name: String,
     db: Option<Db>,
     model: Arc<BertModel>,
     model_config: ModelConfig,
@@ -260,13 +259,12 @@ impl SnippetRetriever {
         window_size: usize,
         window_step: usize,
     ) -> Result<Self> {
-        let collection_name = "code-slices".to_owned();
         let (model, tokenizer) =
             build_model_and_tokenizer(model_config.id.clone(), model_config.revision.clone())
                 .await?;
         Ok(Self {
             cache_path,
-            collection_name,
+            // collection_name,
             db: None,
             model: Arc::new(model),
             model_config,
@@ -276,12 +274,20 @@ impl SnippetRetriever {
         })
     }
 
-    pub(crate) async fn initialise_database(&mut self, db_name: &str) -> Result<Db> {
+    fn workspace_name_to_snippet_collections(&self, workspace_root: &str) -> String {
+        format!("{}--{}", "workspace", workspace_root).to_string()
+    }
+
+    pub(crate) async fn initialise_database(
+        &mut self,
+        db_name: &str,
+        workspace_root: &str,
+    ) -> Result<Db> {
         let uri = self.cache_path.join(db_name);
         let mut db = Db::open(uri).await.expect("failed to open database");
         match db
             .create_collection(
-                self.collection_name.clone(),
+                self.workspace_name_to_snippet_collections(workspace_root),
                 self.model_config.embeddings_size,
                 Distance::Cosine,
             )
@@ -303,24 +309,24 @@ impl SnippetRetriever {
         config: Arc<LlmLsConfig>,
         token: NumberOrString,
         workspace_root: &str,
+        workspace_path: &str,
     ) -> Result<()> {
-        debug!("building workspace snippets");
+        debug!("building snippets for workspace {workspace_root}");
         let start = Instant::now();
-        let workspace_root = PathBuf::from(workspace_root);
         if self.db.is_none() {
-            self.initialise_database(&format!(
-                "{}--{}",
-                workspace_root
-                    .file_name()
-                    .ok_or_else(|| Error::NoFinalPath(workspace_root.clone()))?
-                    .to_str()
-                    .ok_or(Error::NonUnicode)?,
-                self.model_config.id.replace('/', "--"),
-            ))
+            self.initialise_database(
+                &format!(
+                    "{}--{}",
+                    "code-slices".to_owned(),
+                    self.model_config.id.replace('/', "--"),
+                ),
+                workspace_root,
+            )
             .await?;
         }
+        let workspace_path: PathBuf = PathBuf::from(workspace_path);
         let mut files = Vec::new();
-        let mut gitignore = Gitignore::parse(&workspace_root).ok();
+        let mut gitignore = Gitignore::parse(&workspace_path).ok();
         for pattern in config.ignored_paths.iter() {
             if let Some(gitignore) = gitignore.as_mut() {
                 if let Err(err) = gitignore.add_rule(pattern.clone()) {
@@ -341,7 +347,7 @@ impl SnippetRetriever {
             })
             .await;
         let mut stack = VecDeque::new();
-        stack.push_back(workspace_root.clone());
+        stack.push_back(workspace_path.clone());
         while let Some(src) = stack.pop_back() {
             let mut entries = tokio::fs::read_dir(&src).await?;
             while let Some(entry) = entries.next_entry().await? {
@@ -367,7 +373,7 @@ impl SnippetRetriever {
         }
         for (i, file) in files.iter().enumerate() {
             let file_url = file.to_str().expect("file path should be utf8").to_owned();
-            self.add_document(file_url).await?;
+            self.add_document(file_url, workspace_root).await?;
             client
                 .send_notification::<Progress>(ProgressParams {
                     token: token.clone(),
@@ -376,7 +382,7 @@ impl SnippetRetriever {
                             message: Some(format!(
                                 "{i}/{} ({})",
                                 files.len(),
-                                file.strip_prefix(workspace_root.as_path())?
+                                file.strip_prefix(workspace_path.as_path())?
                                     .to_str()
                                     .expect("expect file name to be valid unicode")
                             )),
@@ -393,16 +399,23 @@ impl SnippetRetriever {
         Ok(())
     }
 
-    pub(crate) async fn add_document(&self, file_url: String) -> Result<()> {
-        self.build_and_add_snippets(file_url, 0, None).await?;
+    pub(crate) async fn add_document(&self, file_url: String, workspace_root: &str) -> Result<()> {
+        self.build_and_add_snippets(file_url, 0, None, workspace_root)
+            .await?;
         Ok(())
     }
 
-    pub(crate) async fn update_document(&mut self, file_url: String, range: Range) -> Result<()> {
+    pub(crate) async fn update_document(
+        &mut self,
+        file_url: String,
+        range: Range,
+        workspace_root: &str,
+    ) -> Result<()> {
         self.build_and_add_snippets(
             file_url,
             range.start.line as usize,
             Some(range.end.line as usize),
+            workspace_root,
         )
         .await?;
         Ok(())
@@ -459,12 +472,14 @@ impl SnippetRetriever {
         &self,
         query: &[f32],
         filter: Option<FilterBuilder>,
+        workspace_root: &str,
     ) -> Result<Vec<Snippet>> {
         let db = match self.db.as_ref() {
             Some(db) => db.clone(),
             None => return Err(Error::UninitialisedDatabase),
         };
-        let col = db.get_collection(&self.collection_name).await?;
+        let target_collection_name = self.workspace_name_to_snippet_collections(workspace_root);
+        let col = db.get_collection(&target_collection_name).await?;
         let result = col
             .read()
             .await
@@ -485,12 +500,19 @@ impl SnippetRetriever {
         Ok(())
     }
 
-    pub(crate) async fn remove(&self, file_url: String, range: Range) -> Result<()> {
+    pub(crate) async fn remove(
+        &self,
+        file_url: String,
+        range: Range,
+        target_workspace: &str,
+    ) -> Result<()> {
         let db = match self.db.as_ref() {
             Some(db) => db.clone(),
             None => return Err(Error::UninitialisedDatabase),
         };
-        let col = db.get_collection(&self.collection_name).await?;
+        let col = db
+            .get_collection(&self.workspace_name_to_snippet_collections(&target_workspace))
+            .await?;
         col.write().await.remove(Some(
             Collection::filter()
                 .comparison(
@@ -542,12 +564,14 @@ impl SnippetRetriever {
         file_url: String,
         start: usize,
         end: Option<usize>,
+        workspace_root: &str,
     ) -> Result<()> {
         let db = match self.db.as_ref() {
             Some(db) => db.clone(),
             None => return Err(Error::UninitialisedDatabase),
         };
-        let col = db.get_collection("code-slices").await?;
+        let collection_name = self.workspace_name_to_snippet_collections(workspace_root);
+        let col = db.get_collection(&collection_name).await?;
         let file = tokio::fs::read_to_string(&file_url).await?;
         let lines = file.split('\n').collect::<Vec<_>>();
         let end = end.unwrap_or(lines.len()).min(lines.len());
