@@ -190,6 +190,7 @@ async fn build_prompt(
     file_url: &str,
     language_id: LanguageId,
     snippet_retriever: Arc<RwLock<SnippetRetriever>>,
+    target_workspace: &str,
 ) -> Result<String> {
     let t = Instant::now();
     if fim.enabled {
@@ -259,6 +260,7 @@ async fn build_prompt(
                     Compare::Neq,
                     file_url.into(),
                 )),
+                target_workspace
             )
             .await?;
         let context_header = build_context_header(language_id, snippets);
@@ -307,6 +309,7 @@ async fn build_prompt(
                     Compare::Neq,
                     file_url.into(),
                 )),
+                target_workspace
             )
             .await?;
         let context_header = build_context_header(language_id, snippets);
@@ -508,28 +511,26 @@ fn build_url(backend: Backend, model: &str) -> String {
     }
 }
 
-impl LlmService {
-    async fn file_uri_to_workspace(&self, file_uri: String) -> String {
-        debug!("From file to workspace {}", file_uri);
-        debug!("With workspaces {:?}", self.workspace_folders);
-        let folders = self.workspace_folders.read().await;
-        match folders.as_ref() {
-            Some(folders) => {
-                let parent_workspace = folders
-                    .clone()
-                    .into_iter()
-                    .filter(|folder| file_uri.contains(folder.uri.path()))
-                    .collect::<Vec<WorkspaceFolder>>();
-                if parent_workspace.is_empty() {
-                    folders[0].name.clone()
-                } else {
-                    parent_workspace[0].name.clone()
-                }
+fn file_uri_to_workspace(workspace_folders: Option<&Vec<WorkspaceFolder>>, file_uri: &str) -> String {
+    // let folders = self.workspace_folders.read().await;
+    match workspace_folders {
+        Some(folders) => {
+            let parent_workspace = folders
+                .clone()
+                .into_iter()
+                .filter(|folder| file_uri.contains(folder.uri.path()))
+                .collect::<Vec<WorkspaceFolder>>();
+            if parent_workspace.is_empty() {
+                folders[0].name.clone()
+            } else {
+                parent_workspace[0].name.clone()
             }
-            None => "".to_string(),
         }
+        None => "".to_string(),
     }
+}
 
+impl LlmService {
     async fn get_completions(
         &self,
         params: GetCompletionsParams,
@@ -541,7 +542,9 @@ impl LlmService {
             let document_map = self.document_map.read().await;
 
             let file_url = params.text_document_position.text_document.uri.as_str();
-            let target_workspace = self.file_uri_to_workspace(file_url.to_string()).await;
+            let target_workspace = file_uri_to_workspace(
+                self.workspace_folders.read().await.as_ref(),
+                file_url);
             let document =
                 match document_map.get(file_url) {
                     Some(doc) => doc,
@@ -600,6 +603,7 @@ impl LlmService {
                 &file_url.replace("file://", ""),
                 document.language_id,
                 self.snippet_retriever.clone(),
+                &target_workspace,
             ).await?;
 
             let http_client = if params.tls_skip_verify_insecure {
@@ -722,12 +726,15 @@ impl LanguageServer for LlmService {
                         .await;
                 }
                 let mut guard = snippet_retriever.write().await;
+                let workspace_path = &workspace_folders[0].uri.path().to_string();
+                let workspace_root = file_uri_to_workspace(Some(workspace_folders), &workspace_path);
                 tokio::select! {
                     res = guard.build_workspace_snippets(
                         client.clone(),
                         config,
                         token,
-                        workspace_folders[0].uri.path(),
+                        &workspace_root,
+                        &workspace_path,
                     ) => {
                         if let Err(err) = res {
                             error!("failed building workspace snippets: {err}");
@@ -800,6 +807,9 @@ impl LanguageServer for LlmService {
                     match doc.change(range, &change.text).await {
                         Ok((start, old_end, new_end)) => {
                             let start = Position::new(start as u32, 0);
+                            let workspace_folders = self.workspace_folders.read().await;
+                            let target_workspace = file_uri_to_workspace(workspace_folders.as_ref(), path);
+
                             if let Err(err) = self
                                 .snippet_retriever
                                 .write()
@@ -807,6 +817,7 @@ impl LanguageServer for LlmService {
                                 .remove(
                                     path.to_owned(),
                                     Range::new(start, Position::new(old_end as u32, 0)),
+                                    &target_workspace,
                                 )
                                 .await
                             {
@@ -819,6 +830,7 @@ impl LanguageServer for LlmService {
                                 .update_document(
                                     path.to_owned(),
                                     Range::new(start, Position::new(new_end as u32, 0)),
+                                    &target_workspace,
                                 )
                                 .await
                             {
@@ -1018,10 +1030,10 @@ mod tests {
         // let (service, socket) = LspService::new(|client| LlmService { client });
         let service = service_setup().await;
         {
-            let inn = service
-                .inner()
-                .file_uri_to_workspace("/home/test".to_string())
-                .await;
+            let folders = service.inner().workspace_folders.read().await;
+            let inn = file_uri_to_workspace(folders.as_ref(),
+                "/home/test");
+                
             assert_eq!(inn, "");
         }
         {
@@ -1036,10 +1048,9 @@ mod tests {
                 },
             ]
             .into();
-            let inn = service
-                .inner()
-                .file_uri_to_workspace("/home/test/src/lib/main.py".to_string())
-                .await;
+            let folders = service.inner().workspace_folders.read().await;
+            let inn = file_uri_to_workspace(folders.as_ref(),
+            "/home/test/src/lib/main.py");
             assert_eq!(inn, "test_repo");
         }
         {
@@ -1048,10 +1059,8 @@ mod tests {
                 uri: Url::from_directory_path("/home/other_test").unwrap(),
             }]
             .into();
-            let inn = service
-                .inner()
-                .file_uri_to_workspace("/home/test/src/lib/main.py".to_string())
-                .await;
+            let folders = service.inner().workspace_folders.read().await;
+            let inn = file_uri_to_workspace(folders.as_ref(), "/home/test/src/lib/main.py");
             assert_eq!(inn, "other_repo");
         }
     }
