@@ -417,6 +417,17 @@ async fn get_tokenizer(
 fn build_url(backend: Backend, model: &str) -> String {
     match backend {
         Backend::HuggingFace { url } => format!("{url}/models/{model}"),
+        Backend::LlamaCpp { mut url } => {
+            if url.ends_with("/completions") {
+                url
+            } else if url.ends_with('/') {
+                url.push_str("completions");
+                url
+            } else {
+                url.push_str("/completions");
+                url
+            }
+        }
         Backend::Ollama { url } => url,
         Backend::OpenAi { url } => url,
         Backend::Tgi { url } => url,
@@ -540,7 +551,8 @@ impl LanguageServer for LlmService {
                 general_capabilities
                     .position_encodings
                     .map(TryFrom::try_from)
-            }).unwrap_or(Ok(document::PositionEncodingKind::Utf16))?;
+            })
+            .unwrap_or(Ok(document::PositionEncodingKind::Utf16))?;
 
         *self.position_encoding.write().await = position_encoding;
 
