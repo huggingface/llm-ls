@@ -16,6 +16,7 @@ tls_skip_verify_insecure: false
 tokenizer_config:
   repository: codellama/CodeLlama-13b-hf
 tokens_to_clear: ["<EOT>"]
+disable_url_path_completion: false
 repositories:
   - source:
       type: local

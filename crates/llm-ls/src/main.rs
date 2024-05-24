@@ -246,8 +246,15 @@ async fn request_completion(
         params.request_body.clone(),
     );
     let headers = build_headers(&params.backend, params.api_token.as_ref(), params.ide)?;
+    let url = build_url(
+        params.backend.clone(),
+        &params.model,
+        params.disable_url_path_completion,
+    );
+    info!(?headers, url, "sending request to backend");
+    debug!(?headers, body = ?json, url, "sending request to backend");
     let res = http_client
-        .post(build_url(params.backend.clone(), &params.model))
+        .post(url)
         .json(&json)
         .headers(headers)
         .send()
@@ -414,7 +421,12 @@ async fn get_tokenizer(
     }
 }
 
-fn build_url(backend: Backend, model: &str) -> String {
+// TODO: add configuration parameter to disable path auto-complete?
+fn build_url(backend: Backend, model: &str, disable_url_path_completion: bool) -> String {
+    if disable_url_path_completion {
+        return backend.url();
+    }
+
     match backend {
         Backend::HuggingFace { url } => format!("{url}/models/{model}"),
         Backend::LlamaCpp { mut url } => {
@@ -428,9 +440,51 @@ fn build_url(backend: Backend, model: &str) -> String {
                 url
             }
         }
-        Backend::Ollama { url } => url,
-        Backend::OpenAi { url } => url,
-        Backend::Tgi { url } => url,
+        Backend::Ollama { mut url } => {
+            if url.ends_with("/api/generate") {
+                url
+            } else if url.ends_with("/api/") {
+                url.push_str("generate");
+                url
+            } else if url.ends_with("/api") {
+                url.push_str("/generate");
+                url
+            } else if url.ends_with('/') {
+                url.push_str("api/generate");
+                url
+            } else {
+                url.push_str("/api/generate");
+                url
+            }
+        }
+        Backend::OpenAi { mut url } => {
+            if url.ends_with("/v1/completions") {
+                url
+            } else if url.ends_with("/v1/") {
+                url.push_str("completions");
+                url
+            } else if url.ends_with("/v1") {
+                url.push_str("/completions");
+                url
+            } else if url.ends_with('/') {
+                url.push_str("v1/completions");
+                url
+            } else {
+                url.push_str("/v1/completions");
+                url
+            }
+        }
+        Backend::Tgi { mut url } => {
+            if url.ends_with("/generate") {
+                url
+            } else if url.ends_with('/') {
+                url.push_str("generate");
+                url
+            } else {
+                url.push_str("/generate");
+                url
+            }
+        }
     }
 }
 
@@ -466,8 +520,8 @@ impl LlmService {
                 backend = ?params.backend,
                 ide = %params.ide,
                 request_body = serde_json::to_string(&params.request_body).map_err(internal_error)?,
-                "received completion request for {}",
-                params.text_document_position.text_document.uri
+                disable_url_path_completion = params.disable_url_path_completion,
+                "received completion request",
             );
             if params.api_token.is_none() && params.backend.is_using_inference_api() {
                 let now = Instant::now();
