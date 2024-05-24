@@ -129,7 +129,7 @@ fn get_parser(language_id: LanguageId) -> Result<Parser> {
 #[derive(Clone, Debug, Copy)]
 /// We redeclare this enum here because the `lsp_types` crate exports a Cow
 /// type that is unconvenient to deal with.
-pub enum PositionEncodingKind {
+pub(crate) enum PositionEncodingKind {
     Utf8,
     Utf16,
     Utf32,
@@ -168,7 +168,7 @@ impl TryFrom<Vec<tower_lsp::lsp_types::PositionEncodingKind>> for PositionEncodi
 }
 
 impl PositionEncodingKind {
-    pub fn to_lsp_type(self) -> tower_lsp::lsp_types::PositionEncodingKind {
+    pub(crate) fn to_lsp_type(self) -> tower_lsp::lsp_types::PositionEncodingKind {
         match self {
             PositionEncodingKind::Utf8 => tower_lsp::lsp_types::PositionEncodingKind::UTF8,
             PositionEncodingKind::Utf16 => tower_lsp::lsp_types::PositionEncodingKind::UTF16,

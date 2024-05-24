@@ -96,6 +96,16 @@ impl Backend {
             _ => false,
         }
     }
+
+    pub fn url(self) -> String {
+        match self {
+            Self::HuggingFace { url } => url,
+            Self::LlamaCpp { url } => url,
+            Self::Ollama { url } => url,
+            Self::OpenAi { url } => url,
+            Self::Tgi { url } => url,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -141,6 +151,8 @@ pub struct GetCompletionsParams {
     pub tls_skip_verify_insecure: bool,
     #[serde(default)]
     pub request_body: Map<String, Value>,
+    #[serde(default)]
+    pub disable_url_path_completion: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

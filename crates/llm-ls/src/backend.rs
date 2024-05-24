@@ -26,7 +26,7 @@ impl Display for APIError {
 
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
-pub enum APIResponse {
+pub(crate) enum APIResponse {
     Generation(Generation),
     Generations(Vec<Generation>),
     Error(APIError),
