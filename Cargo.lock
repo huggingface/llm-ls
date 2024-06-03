@@ -982,7 +982,7 @@ checksum = "da2479e8c062e40bf0066ffa0bc823de0a9368974af99c9f6df941d2c231e03f"
 
 [[package]]
 name = "llm-ls"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "clap",
  "custom-types",

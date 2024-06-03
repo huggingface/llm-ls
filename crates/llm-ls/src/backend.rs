@@ -26,7 +26,7 @@ impl Display for APIError {
 
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
-pub enum APIResponse {
+pub(crate) enum APIResponse {
     Generation(Generation),
     Generations(Vec<Generation>),
     Error(APIError),
@@ -64,6 +64,37 @@ fn parse_api_text(text: &str) -> Result<Vec<Generation>> {
         APIResponse::Generation(gen) => Ok(vec![gen]),
         APIResponse::Generations(gens) => Ok(gens),
         APIResponse::Error(err) => Err(Error::InferenceApi(err)),
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct LlamaCppGeneration {
+    content: String,
+}
+
+impl From<LlamaCppGeneration> for Generation {
+    fn from(value: LlamaCppGeneration) -> Self {
+        Generation {
+            generated_text: value.content,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum LlamaCppAPIResponse {
+    Generation(LlamaCppGeneration),
+    Error(APIError),
+}
+
+fn build_llamacpp_headers() -> HeaderMap {
+    HeaderMap::new()
+}
+
+fn parse_llamacpp_text(text: &str) -> Result<Vec<Generation>> {
+    match serde_json::from_str(text)? {
+        LlamaCppAPIResponse::Generation(gen) => Ok(vec![gen.into()]),
+        LlamaCppAPIResponse::Error(err) => Err(Error::LlamaCpp(err)),
     }
 }
 
@@ -192,6 +223,9 @@ pub(crate) fn build_body(
                 request_body.insert("parameters".to_owned(), params);
             }
         }
+        Backend::LlamaCpp { .. } => {
+            request_body.insert("prompt".to_owned(), Value::String(prompt));
+        }
         Backend::Ollama { .. } | Backend::OpenAi { .. } => {
             request_body.insert("prompt".to_owned(), Value::String(prompt));
             request_body.insert("model".to_owned(), Value::String(model));
@@ -208,6 +242,7 @@ pub(crate) fn build_headers(
 ) -> Result<HeaderMap> {
     match backend {
         Backend::HuggingFace { .. } => build_api_headers(api_token, ide),
+        Backend::LlamaCpp { .. } => Ok(build_llamacpp_headers()),
         Backend::Ollama { .. } => Ok(build_ollama_headers()),
         Backend::OpenAi { .. } => build_openai_headers(api_token, ide),
         Backend::Tgi { .. } => build_tgi_headers(api_token, ide),
@@ -217,6 +252,7 @@ pub(crate) fn build_headers(
 pub(crate) fn parse_generations(backend: &Backend, text: &str) -> Result<Vec<Generation>> {
     match backend {
         Backend::HuggingFace { .. } => parse_api_text(text),
+        Backend::LlamaCpp { .. } => parse_llamacpp_text(text),
         Backend::Ollama { .. } => parse_ollama_text(text),
         Backend::OpenAi { .. } => parse_openai_text(text),
         Backend::Tgi { .. } => parse_tgi_text(text),

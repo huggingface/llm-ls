@@ -129,7 +129,7 @@ fn get_parser(language_id: LanguageId) -> Result<Parser> {
 #[derive(Clone, Debug, Copy)]
 /// We redeclare this enum here because the `lsp_types` crate exports a Cow
 /// type that is unconvenient to deal with.
-pub enum PositionEncodingKind {
+pub(crate) enum PositionEncodingKind {
     Utf8,
     Utf16,
     Utf32,
@@ -168,7 +168,7 @@ impl TryFrom<Vec<tower_lsp::lsp_types::PositionEncodingKind>> for PositionEncodi
 }
 
 impl PositionEncodingKind {
-    pub fn to_lsp_type(&self) -> tower_lsp::lsp_types::PositionEncodingKind {
+    pub(crate) fn to_lsp_type(self) -> tower_lsp::lsp_types::PositionEncodingKind {
         match self {
             PositionEncodingKind::Utf8 => tower_lsp::lsp_types::PositionEncodingKind::UTF8,
             PositionEncodingKind::Utf16 => tower_lsp::lsp_types::PositionEncodingKind::UTF16,
@@ -205,9 +205,10 @@ impl Document {
     ) -> Result<()> {
         match change.range {
             Some(range) => {
-                if range.start.line < range.end.line
+                if range.start.line > range.end.line
                     || (range.start.line == range.end.line
-                        && range.start.character <= range.end.character) {
+                        && range.start.character > range.end.character)
+                {
                     return Err(Error::InvalidRange(range));
                 }
 
@@ -219,7 +220,10 @@ impl Document {
 
                 // 1. Get the line at which the change starts.
                 let change_start_line_idx = range.start.line as usize;
-                let change_start_line = self.text.get_line(change_start_line_idx).ok_or_else(|| Error::OutOfBoundLine(change_start_line_idx, self.text.len_lines()))?;
+                let change_start_line =
+                    self.text.get_line(change_start_line_idx).ok_or_else(|| {
+                        Error::OutOfBoundLine(change_start_line_idx, self.text.len_lines())
+                    })?;
 
                 // 2. Get the line at which the change ends. (Small optimization
                 // where we first check whether start and end line are the
@@ -228,7 +232,9 @@ impl Document {
                 let change_end_line_idx = range.end.line as usize;
                 let change_end_line = match same_line {
                     true => change_start_line,
-                    false => self.text.get_line(change_end_line_idx).ok_or_else(|| Error::OutOfBoundLine(change_end_line_idx, self.text.len_lines()))?,
+                    false => self.text.get_line(change_end_line_idx).ok_or_else(|| {
+                        Error::OutOfBoundLine(change_end_line_idx, self.text.len_lines())
+                    })?,
                 };
 
                 fn compute_char_idx(
@@ -330,7 +336,7 @@ impl Document {
                             self.tree = Some(new_tree);
                         }
                         None => {
-                            return Err(Error::TreeSitterParseError);
+                            return Err(Error::TreeSitterParsing);
                         }
                     }
                 }
@@ -416,7 +422,9 @@ mod test {
         let mut rope = Rope::from_str(
             "let a = '🥸 你好';\rfunction helloWorld() { return '🤲🏿'; }\nlet b = 'Hi, 😊';",
         );
-        let mut doc = Document::open(&LanguageId::JavaScript.to_string(), &rope.to_string()).await.unwrap();
+        let mut doc = Document::open(&LanguageId::JavaScript.to_string(), &rope.to_string())
+            .await
+            .unwrap();
         let mut parser = Parser::new();
 
         parser
@@ -464,7 +472,9 @@ mod test {
     #[tokio::test]
     async fn test_text_document_apply_content_change_bounds() {
         let rope = Rope::from_str("");
-        let mut doc = Document::open(&LanguageId::Unknown.to_string(), &rope.to_string()).await.unwrap();
+        let mut doc = Document::open(&LanguageId::Unknown.to_string(), &rope.to_string())
+            .await
+            .unwrap();
 
         assert!(doc
             .apply_content_change(new_change!(0, 0, 0, 1, ""), PositionEncodingKind::Utf16)
@@ -513,7 +523,9 @@ mod test {
     async fn test_document_update_tree_consistency_easy() {
         let a = "let a = '你好';\rlet b = 'Hi, 😊';";
 
-        let mut document = Document::open(&LanguageId::JavaScript.to_string(), a).await.unwrap();
+        let mut document = Document::open(&LanguageId::JavaScript.to_string(), a)
+            .await
+            .unwrap();
 
         document
             .apply_content_change(new_change!(0, 9, 0, 11, "𐐀"), PositionEncodingKind::Utf16)
@@ -541,7 +553,9 @@ mod test {
     async fn test_document_update_tree_consistency_medium() {
         let a = "let a = '🥸 你好';\rfunction helloWorld() { return '🤲🏿'; }\nlet b = 'Hi, 😊';";
 
-        let mut document = Document::open(&LanguageId::JavaScript.to_string(), a).await.unwrap();
+        let mut document = Document::open(&LanguageId::JavaScript.to_string(), a)
+            .await
+            .unwrap();
 
         document
             .apply_content_change(new_change!(0, 14, 2, 13, "，"), PositionEncodingKind::Utf16)

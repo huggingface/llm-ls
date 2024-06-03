@@ -12,7 +12,6 @@ env:
   RUSTFLAGS: "-D warnings -W unreachable-pub"
   RUSTUP_MAX_RETRIES: 10
   FETCH_DEPTH: 0 # pull in the tags for the version string
-  MACOSX_DEPLOYMENT_TARGET: 10.15
   CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
   CARGO_TARGET_ARM_UNKNOWN_LINUX_GNUEABIHF_LINKER: arm-linux-gnueabihf-gcc
 
@@ -55,7 +54,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           fetch-depth: ${{ env.FETCH_DEPTH }}
 
@@ -81,7 +80,7 @@ jobs:
         run: cargo xtask dist
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v1
+        uses: actions/upload-artifact@v4
         with:
           name: dist-${{ matrix.target }}
           path: ./dist
@@ -103,7 +102,7 @@ jobs:
         run: apk add --no-cache git clang lld musl-dev nodejs npm openssl-dev pkgconfig g++
 
       - name: Checkout repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           fetch-depth: ${{ env.FETCH_DEPTH }}
 
@@ -111,7 +110,7 @@ jobs:
         run: cargo xtask dist
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v1
+        uses: actions/upload-artifact@v4
         with:
           name: dist-x86_64-unknown-linux-musl
           path: ./dist
@@ -122,7 +121,7 @@ jobs:
     needs: ["dist", "dist-x86_64-unknown-linux-musl"]
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           fetch-depth: ${{ env.FETCH_DEPTH }}
 
@@ -133,41 +132,41 @@ jobs:
         env:
           BRANCH: ${{ github.ref_name }}
         id: split
-        run: echo "::set-output name=tag::${BRANCH##*/}"
+        run: echo "tag=${BRANCH##*/}" >> $GITHUB_OUTPUT
 
-      - uses: actions/download-artifact@v1
+      - uses: actions/download-artifact@v4
         with:
           name: dist-aarch64-apple-darwin
           path: dist
-      - uses: actions/download-artifact@v1
+      - uses: actions/download-artifact@v4
         with:
           name: dist-x86_64-apple-darwin
           path: dist
-      - uses: actions/download-artifact@v1
+      - uses: actions/download-artifact@v4
         with:
           name: dist-x86_64-unknown-linux-gnu
           path: dist
-      - uses: actions/download-artifact@v1
+      - uses: actions/download-artifact@v4
         with:
           name: dist-x86_64-unknown-linux-musl
           path: dist
-      - uses: actions/download-artifact@v1
+      - uses: actions/download-artifact@v4
         with:
           name: dist-aarch64-unknown-linux-gnu
           path: dist
-      - uses: actions/download-artifact@v1
+      - uses: actions/download-artifact@v4
         with:
           name: dist-arm-unknown-linux-gnueabihf
           path: dist
-      - uses: actions/download-artifact@v1
+      - uses: actions/download-artifact@v4
         with:
           name: dist-x86_64-pc-windows-msvc
           path: dist
-      - uses: actions/download-artifact@v1
+      - uses: actions/download-artifact@v4
         with:
           name: dist-i686-pc-windows-msvc
           path: dist
-      # - uses: actions/download-artifact@v1
+      # - uses: actions/download-artifact@v4
       #   with:
       #     name: dist-aarch64-pc-windows-msvc
       #     path: dist

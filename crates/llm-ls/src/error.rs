@@ -33,6 +33,8 @@ pub enum Error {
     InvalidRepositoryId,
     #[error("invalid tokenizer path")]
     InvalidTokenizerPath,
+    #[error("llama.cpp error: {0}")]
+    LlamaCpp(crate::backend::APIError),
     #[error("ollama error: {0}")]
     Ollama(crate::backend::APIError),
     #[error("openai error: {0}")]
@@ -50,7 +52,7 @@ pub enum Error {
     #[error("tgi error: {0}")]
     Tgi(crate::backend::APIError),
     #[error("tree-sitter parse error: timeout possibly exceeded")]
-    TreeSitterParseError,
+    TreeSitterParsing,
     #[error("tree-sitter language error: {0}")]
     TreeSitterLanguage(#[from] tree_sitter::LanguageError),
     #[error("tokenizer error: {0}")]
@@ -60,7 +62,7 @@ pub enum Error {
     #[error("unknown backend: {0}")]
     UnknownBackend(String),
     #[error("unknown encoding kind: {0}")]
-    UnknownEncodingKind(String)
+    UnknownEncodingKind(String),
 }
 
 pub(crate) type Result<T> = std::result::Result<T, Error>;

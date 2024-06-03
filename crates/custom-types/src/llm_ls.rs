@@ -67,10 +67,9 @@ pub enum Backend {
         #[serde(default = "hf_default_url", deserialize_with = "parse_url")]
         url: String,
     },
-    // TODO:
-    // LlamaCpp {
-    //   url: String,
-    // },
+    LlamaCpp {
+        url: String,
+    },
     Ollama {
         url: String,
     },
@@ -95,6 +94,16 @@ impl Backend {
         match self {
             Self::HuggingFace { url } => url.contains(HF_INFERENCE_API_HOSTNAME),
             _ => false,
+        }
+    }
+
+    pub fn url(self) -> String {
+        match self {
+            Self::HuggingFace { url } => url,
+            Self::LlamaCpp { url } => url,
+            Self::Ollama { url } => url,
+            Self::OpenAi { url } => url,
+            Self::Tgi { url } => url,
         }
     }
 }
@@ -142,6 +151,8 @@ pub struct GetCompletionsParams {
     pub tls_skip_verify_insecure: bool,
     #[serde(default)]
     pub request_body: Map<String, Value>,
+    #[serde(default)]
+    pub disable_url_path_completion: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

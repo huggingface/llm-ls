@@ -209,6 +209,7 @@ struct RepositoriesConfig {
     tokenizer_config: Option<TokenizerConfig>,
     tokens_to_clear: Vec<String>,
     request_body: Map<String, Value>,
+    disable_url_path_completion: bool,
 }
 
 struct HoleCompletionResult {
@@ -490,6 +491,7 @@ async fn complete_holes(
         tokenizer_config,
         tokens_to_clear,
         request_body,
+        disable_url_path_completion,
         ..
     } = repos_config;
     async move {
@@ -555,6 +557,7 @@ async fn complete_holes(
                 tokens_to_clear: tokens_to_clear.clone(),
                 tokenizer_config: tokenizer_config.clone(),
                 request_body: request_body.clone(),
+                disable_url_path_completion,
             })
             .await?;
 

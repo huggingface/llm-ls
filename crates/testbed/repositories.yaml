@@ -16,6 +16,7 @@ tls_skip_verify_insecure: false
 tokenizer_config:
   repository: bigcode/starcoder
 tokens_to_clear: ["<|endoftext|>"]
+disable_url_path_completion: false
 repositories:
   - source:
       type: local
