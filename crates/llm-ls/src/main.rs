@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::fmt::Display;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 use tokenizers::Tokenizer;
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpListener;
@@ -134,7 +134,7 @@ struct LlmService {
     unsafe_http_client: reqwest::Client,
     workspace_folders: Arc<RwLock<Option<Vec<WorkspaceFolder>>>>,
     tokenizer_map: Arc<RwLock<HashMap<String, Arc<Tokenizer>>>>,
-    unauthenticated_warn_at: Arc<RwLock<Instant>>,
+    unauthenticated_warn_at: Arc<RwLock<SystemTime>>,
     position_encoding: Arc<RwLock<document::PositionEncodingKind>>,
 }
 
@@ -524,13 +524,13 @@ impl LlmService {
                 "received completion request",
             );
             if params.api_token.is_none() && params.backend.is_using_inference_api() {
-                let now = Instant::now();
+                let now = SystemTime::now();
                 let unauthenticated_warn_at = self.unauthenticated_warn_at.read().await;
-                if now.duration_since(*unauthenticated_warn_at) > MAX_WARNING_REPEAT {
+                if now.duration_since(*unauthenticated_warn_at).unwrap_or_default() > MAX_WARNING_REPEAT {
                     drop(unauthenticated_warn_at);
                     self.client.show_message(MessageType::WARNING, "You are currently unauthenticated and will get rate limited. To reduce rate limiting, login with your API Token and consider subscribing to PRO: https://huggingface.co/pricing#pro").await;
                     let mut unauthenticated_warn_at = self.unauthenticated_warn_at.write().await;
-                    *unauthenticated_warn_at = Instant::now();
+                    *unauthenticated_warn_at = SystemTime::now();
                 }
             }
             let completion_type = should_complete(document, params.text_document_position.position)?;
@@ -767,9 +767,9 @@ async fn main() {
         workspace_folders: Arc::new(RwLock::new(None)),
         tokenizer_map: Arc::new(RwLock::new(HashMap::new())),
         unauthenticated_warn_at: Arc::new(RwLock::new(
-            Instant::now()
+            SystemTime::now()
                 .checked_sub(MAX_WARNING_REPEAT)
-                .expect("instant to be in bounds"),
+                .unwrap_or(SystemTime::now()),
         )),
     })
     .custom_method("llm-ls/getCompletions", LlmService::get_completions)
