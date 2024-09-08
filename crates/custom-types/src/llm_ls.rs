@@ -63,6 +63,9 @@ fn hf_default_url() -> String {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase", tag = "backend")]
 pub enum Backend {
+    Cohere {
+        url: String,
+    },
     HuggingFace {
         #[serde(default = "hf_default_url", deserialize_with = "parse_url")]
         url: String,
@@ -99,6 +102,7 @@ impl Backend {
 
     pub fn url(self) -> String {
         match self {
+            Self::Cohere { url } => url,
             Self::HuggingFace { url } => url,
             Self::LlamaCpp { url } => url,
             Self::Ollama { url } => url,

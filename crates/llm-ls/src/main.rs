@@ -428,6 +428,23 @@ fn build_url(backend: Backend, model: &str, disable_url_path_completion: bool) -
     }
 
     match backend {
+        Backend::Cohere { mut url } => {
+            if url.ends_with("/v1/chat") {
+                url
+            } else if url.ends_with("/v1/") {
+                url.push_str("chat");
+                url
+            } else if url.ends_with("/v1") {
+                url.push_str("/chat");
+                url
+            } else if url.ends_with('/') {
+                url.push_str("v1/chat");
+                url
+            } else {
+                url.push_str("/v1/chat");
+                url
+            }
+        }
         Backend::HuggingFace { url } => format!("{url}/models/{model}"),
         Backend::LlamaCpp { mut url } => {
             if url.ends_with("/completions") {
