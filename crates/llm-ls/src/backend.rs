@@ -68,6 +68,54 @@ fn parse_api_text(text: &str) -> Result<Vec<Generation>> {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+struct CohereGeneration {
+    text: String,
+}
+
+impl From<CohereGeneration> for Generation {
+    fn from(value: CohereGeneration) -> Self {
+        Generation {
+            generated_text: value.text,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CohereError {
+    message: String,
+}
+
+impl std::error::Error for CohereError {
+    fn description(&self) -> &str {
+        &self.message
+    }
+}
+
+impl Display for CohereError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.message)
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum CohereAPIResponse {
+    Generation(CohereGeneration),
+    Error(CohereError),
+}
+
+fn build_cohere_headers(api_token: Option<&String>, ide: Ide) -> Result<HeaderMap> {
+    build_api_headers(api_token, ide)
+}
+
+fn parse_cohere_text(text: &str) -> Result<Vec<Generation>> {
+    match serde_json::from_str(text)? {
+        CohereAPIResponse::Generation(gen) => Ok(vec![gen.into()]),
+        CohereAPIResponse::Error(err) => Err(Error::Cohere(err)),
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
 struct LlamaCppGeneration {
     content: String,
 }
@@ -214,6 +262,11 @@ pub(crate) fn build_body(
     mut request_body: Map<String, Value>,
 ) -> Map<String, Value> {
     match backend {
+        Backend::Cohere { .. } => {
+            request_body.insert("message".to_owned(), Value::String(prompt));
+            request_body.insert("model".to_owned(), Value::String(model));
+            request_body.insert("stream".to_owned(), Value::Bool(false));
+        }
         Backend::HuggingFace { .. } | Backend::Tgi { .. } => {
             request_body.insert("inputs".to_owned(), Value::String(prompt));
             if let Some(Value::Object(params)) = request_body.get_mut("parameters") {
@@ -241,6 +294,7 @@ pub(crate) fn build_headers(
     ide: Ide,
 ) -> Result<HeaderMap> {
     match backend {
+        Backend::Cohere { .. } => build_cohere_headers(api_token, ide),
         Backend::HuggingFace { .. } => build_api_headers(api_token, ide),
         Backend::LlamaCpp { .. } => Ok(build_llamacpp_headers()),
         Backend::Ollama { .. } => Ok(build_ollama_headers()),
@@ -251,6 +305,7 @@ pub(crate) fn build_headers(
 
 pub(crate) fn parse_generations(backend: &Backend, text: &str) -> Result<Vec<Generation>> {
     match backend {
+        Backend::Cohere { .. } => parse_cohere_text(text),
         Backend::HuggingFace { .. } => parse_api_text(text),
         Backend::LlamaCpp { .. } => parse_llamacpp_text(text),
         Backend::Ollama { .. } => parse_ollama_text(text),

@@ -33,6 +33,8 @@ pub enum Error {
     InvalidRepositoryId,
     #[error("invalid tokenizer path")]
     InvalidTokenizerPath,
+    #[error("cohere error: {0}")]
+    Cohere(crate::backend::CohereError),
     #[error("llama.cpp error: {0}")]
     LlamaCpp(crate::backend::APIError),
     #[error("ollama error: {0}")]
