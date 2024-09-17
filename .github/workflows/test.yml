@@ -27,7 +27,8 @@ jobs:
           - { name: gcanti/io-ts, key: io-ts, parallel: 8, node: true, python: false }
           - { name: colinhacks/zod, key: zod, parallel: 8, node: true, python: false }
           - { name: helix-editor/helix, key: helix, parallel: 2, node: false, python: false }
-    runs-on: [self-hosted, intel-cpu, 8-cpu, ci]
+    runs-on:
+      group: aws-general-8-plus
     container:
       image: ubuntu:22.04
     steps:
@@ -97,7 +98,8 @@ jobs:
 
   comment_results:
     needs: [testbed]
-    runs-on: [self-hosted, intel-cpu, 8-cpu, ci]
+    runs-on:
+      group: aws-general-8-plus
     container:
       image: ubuntu:22.04
     steps:
