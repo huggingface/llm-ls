@@ -118,8 +118,8 @@ enum OllamaAPIResponse {
     Error(APIError),
 }
 
-fn build_ollama_headers() -> HeaderMap {
-    HeaderMap::new()
+fn build_ollama_headers(api_token: Option<&String>, ide: Ide) -> Result<HeaderMap> {
+    build_api_headers(api_token, ide)
 }
 
 fn parse_ollama_text(text: &str) -> Result<Vec<Generation>> {
@@ -243,7 +243,7 @@ pub(crate) fn build_headers(
     match backend {
         Backend::HuggingFace { .. } => build_api_headers(api_token, ide),
         Backend::LlamaCpp { .. } => Ok(build_llamacpp_headers()),
-        Backend::Ollama { .. } => Ok(build_ollama_headers()),
+        Backend::Ollama { .. } => build_ollama_headers(api_token, ide),
         Backend::OpenAi { .. } => build_openai_headers(api_token, ide),
         Backend::Tgi { .. } => build_tgi_headers(api_token, ide),
     }
