@@ -73,6 +73,9 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
 
+      - name: Cargo update
+        run: cargo update
+        
       - name: Build project
         run: cargo build -r
 
