@@ -1,12 +1,13 @@
 [package]
 name = "llm-ls"
-version = "0.5.3"
+version = "0.5.4"
 edition = "2021"
 
 [[bin]]
 name = "llm-ls"
 
 [dependencies]
+time = "0.3.35"
 clap = { version = "4", features = ["derive"] }
 custom-types = { path = "../custom-types" }
 home = "0.5"
