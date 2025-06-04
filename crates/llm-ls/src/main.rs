@@ -430,13 +430,19 @@ fn build_url(backend: Backend, model: &str, disable_url_path_completion: bool) -
     match backend {
         Backend::HuggingFace { url } => format!("{url}/models/{model}"),
         Backend::LlamaCpp { mut url } => {
-            if url.ends_with("/completions") {
+            if url.ends_with("/v1/completions") {
                 url
-            } else if url.ends_with('/') {
+            } else if url.ends_with("/v1/") {
                 url.push_str("completions");
                 url
-            } else {
+            } else if url.ends_with("/v1") {
                 url.push_str("/completions");
+                url
+            } else if url.ends_with('/') {
+                url.push_str("v1/completions");
+                url
+            } else {
+                url.push_str("/v1/completions");
                 url
             }
         }

@@ -68,16 +68,21 @@ fn parse_api_text(text: &str) -> Result<Vec<Generation>> {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-struct LlamaCppGeneration {
-    content: String,
+struct LlamaCppGenerationChoice {
+    text: String,
 }
 
-impl From<LlamaCppGeneration> for Generation {
-    fn from(value: LlamaCppGeneration) -> Self {
+impl From<LlamaCppGenerationChoice> for Generation {
+    fn from(value: LlamaCppGenerationChoice) -> Self {
         Generation {
-            generated_text: value.content,
+            generated_text: value.text,
         }
     }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct LlamaCppGeneration {
+    choices: Vec<LlamaCppGenerationChoice>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -87,13 +92,15 @@ enum LlamaCppAPIResponse {
     Error(APIError),
 }
 
-fn build_llamacpp_headers() -> HeaderMap {
-    HeaderMap::new()
+fn build_llamacpp_headers(api_token: Option<&String>, ide: Ide) -> Result<HeaderMap> {
+    build_api_headers(api_token, ide)
 }
 
 fn parse_llamacpp_text(text: &str) -> Result<Vec<Generation>> {
     match serde_json::from_str(text)? {
-        LlamaCppAPIResponse::Generation(gen) => Ok(vec![gen.into()]),
+        LlamaCppAPIResponse::Generation(completion) => {
+            Ok(completion.choices.into_iter().map(|x| x.into()).collect()) 
+        },
         LlamaCppAPIResponse::Error(err) => Err(Error::LlamaCpp(err)),
     }
 }
@@ -223,10 +230,7 @@ pub(crate) fn build_body(
                 request_body.insert("parameters".to_owned(), params);
             }
         }
-        Backend::LlamaCpp { .. } => {
-            request_body.insert("prompt".to_owned(), Value::String(prompt));
-        }
-        Backend::Ollama { .. } | Backend::OpenAi { .. } => {
+        Backend::Ollama { .. } | Backend::OpenAi { .. } | Backend::LlamaCpp { .. } => {
             request_body.insert("prompt".to_owned(), Value::String(prompt));
             request_body.insert("model".to_owned(), Value::String(model));
             request_body.insert("stream".to_owned(), Value::Bool(false));
@@ -242,7 +246,7 @@ pub(crate) fn build_headers(
 ) -> Result<HeaderMap> {
     match backend {
         Backend::HuggingFace { .. } => build_api_headers(api_token, ide),
-        Backend::LlamaCpp { .. } => Ok(build_llamacpp_headers()),
+        Backend::LlamaCpp { .. } => build_llamacpp_headers(api_token, ide),
         Backend::Ollama { .. } => build_ollama_headers(api_token, ide),
         Backend::OpenAi { .. } => build_openai_headers(api_token, ide),
         Backend::Tgi { .. } => build_tgi_headers(api_token, ide),
