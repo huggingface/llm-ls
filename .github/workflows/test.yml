@@ -9,8 +9,12 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
   cancel-in-progress: true
 
+permissions: {}
+
 jobs:
   testbed:
+    permissions:
+      contents: read
     strategy:
       matrix:
         repo:
@@ -100,6 +104,8 @@ jobs:
           path: ./results.json
 
   comment_results:
+    permissions:
+      pull-requests: write
     needs: [testbed]
     runs-on:
       group: aws-general-8-plus
